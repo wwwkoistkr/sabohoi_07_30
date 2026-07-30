@@ -457,8 +457,7 @@ function baseTotalAmount() {
     var h = '<tr class="foot-winner-row"><td class="foot-no"></td><td class="foot-label" colspan="2"><i class="fas fa-trophy"></i>날짜별 1등</td>';
     if (_vd.hiddenCount > 0) h += '<td class="foot-fold"></td>';
     _vd.visible.forEach(function (d) {
-      h += '<td class="foot-date foot-best-score" data-col="date:' + d.id + '"' + wStyle('date:' + d.id) + '>' + (dateBestScore(d.id) || '') + '</td>';
-      h += '<td class="foot-winner" data-winner-date="' + d.id + '">' + escapeHtml(dateWinnerNames(d.id)) + '</td>';
+      h += '<td colspan="2" class="foot-winner" data-winner-date="' + d.id + '">' + escapeHtml(dateWinnerNames(d.id)) + '</td>';
     });
     h += '</tr>';
 
@@ -511,8 +510,6 @@ function baseTotalAmount() {
     state.dates.forEach(function (d) {
       var winner = foot.querySelector('[data-winner-date="' + d.id + '"]');
       if (winner) winner.textContent = dateWinnerNames(d.id);
-      var score = foot.querySelector('[data-col="date:' + d.id + '"]');
-      if (score && score.classList.contains('foot-best-score')) score.textContent = dateBestScore(d.id) || '';
     });
     var g = foot.querySelector('[data-total-amount]'); if (g && document.activeElement !== g) g.value = fmt(currentTotalAmount());
     refreshBalance();
