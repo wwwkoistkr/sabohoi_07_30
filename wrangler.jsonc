@@ -1,19 +1,16 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "webapp",
+  "name": "sabohoi-07-30",
+  "main": "./dist/_worker.js",
   "compatibility_date": "2026-07-10",
-  "pages_build_output_dir": "./dist",
-  "compatibility_flags": [
-    "nodejs_compat"
-  ],
-  // 자료실 이미지를 저장하는 R2 버킷 (모두가 공유·영구 보관)
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./dist"
+  },
   "r2_buckets": [
     {
       "binding": "ASSETS_BUCKET",
       "bucket_name": "golf-penalty-assets"
     }
   ]
-  // 관리자 쓰기 보호 키(ADMIN_KEY)는 소스에 두지 않고
-  // `wrangler pages secret put ADMIN_KEY` 로 별도 설정한다.
-  // 로컬 개발용 값은 .dev.vars 파일에 둔다(깃 커밋 금지).
 }
