@@ -75,10 +75,16 @@
     });
     return total;
   }
-  function totalAmount() {
+function baseTotalAmount() {
     return state.extra && Object.prototype.hasOwnProperty.call(state.extra, 'total') ? (Number(state.extra.total) || 0) : grandTotal();
   }
-  function balanceFor(dateId) { return totalAmount() - totalExpensesThrough(dateId); }
+  function totalExpensesAll() {
+    var total = 0;
+    state.dates.forEach(function (d) { total += expenseFor(d.id); });
+    return total;
+  }
+  function currentTotalAmount() { return baseTotalAmount() - totalExpensesAll(); }
+  function balanceFor(dateId) { return baseTotalAmount() - totalExpensesThrough(dateId); }
   // 화면에 쓰이는 문구 기본값 (관리자 모드에서 수정 가능)
   function defaultLabels() {
     return {
@@ -292,7 +298,7 @@
     if (!best) return '';
     return state.members.filter(function (m) {
       return (Number(state.cells[cellKey(m.id, dateId)]) || 0) === best;
-    }).map(function (m, i) { return m.name || 'No.' + (state.members.indexOf(m) + 1); }).join(', ');
+    }).map(function (m) { return (m.name || '').trim(); }).filter(Boolean).join(', ');
   }
   function activeRankDate() {
     var today = todayIso();
@@ -458,7 +464,7 @@
 
     var valueSpan = (_vd.hiddenCount > 0 ? 1 : 0) + (_vd.visible.length * 2);
     if (valueSpan < 1) valueSpan = 1;
-    var total = totalAmount();
+    var total = currentTotalAmount();
     h += '<tr class="foot-extra-row foot-total-row"><td class="foot-no"></td><td class="foot-extra-label" colspan="2"><i class="fas fa-coins"></i>총액</td><td colspan="' + valueSpan + '" class="foot-extra-cell foot-total-cell"><input type="text" inputmode="numeric" pattern="[0-9]*" class="extra-input total-input has-val" data-total-amount="1" value="' + fmt(total) + '" placeholder="0" /></td></tr>';
 
     h += '<tr class="foot-extra-row foot-expense-row"><td class="foot-no"></td><td class="foot-extra-label" colspan="2"><i class="fas fa-money-bill-wave"></i>날짜별 지출</td>';
@@ -508,7 +514,7 @@
       var score = foot.querySelector('[data-col="date:' + d.id + '"]');
       if (score && score.classList.contains('foot-best-score')) score.textContent = dateBestScore(d.id) || '';
     });
-    var g = foot.querySelector('[data-total-amount]'); if (g && document.activeElement !== g) g.value = fmt(totalAmount());
+    var g = foot.querySelector('[data-total-amount]'); if (g && document.activeElement !== g) g.value = fmt(currentTotalAmount());
     refreshBalance();
   }
 
@@ -563,7 +569,7 @@
     if (num < 0) num = 0;
     if (!state.extra) state.extra = { expenses: {} };
     if (t.hasAttribute('data-total-amount')) {
-      state.extra.total = num;
+      state.extra.total = num + totalExpensesAll();
     } else {
       if (!state.extra.expenses) state.extra.expenses = {};
       var expenseDateId = t.getAttribute('data-expense-date');
@@ -898,7 +904,7 @@
     state.dates.forEach(function (d) { winnerRow.push(dateBestScore(d.id) || ''); winnerRow.push(dateWinnerNames(d.id)); });
     rows.push(winnerRow);
     var span = state.dates.length * 2;
-    var totalRow = ['', '총액', '']; for (var i = 0; i < span - 1; i++) totalRow.push(''); totalRow.push(totalAmount()); rows.push(totalRow);
+    var totalRow = ['', '총액', '']; for (var i = 0; i < span - 1; i++) totalRow.push(''); totalRow.push(currentTotalAmount()); rows.push(totalRow);
     var expRow = ['', '날짜별 지출', '']; state.dates.forEach(function (d) { expRow.push(expenseFor(d.id)); expRow.push(''); }); rows.push(expRow);
     var balRow = ['', '날짜별 잔액', '']; state.dates.forEach(function (d) { balRow.push(balanceFor(d.id)); balRow.push(''); }); rows.push(balRow);
     var csv = rows.map(function (r) { return r.map(function (c) { var v = String(c == null ? '' : c); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(','); }).join('\n');

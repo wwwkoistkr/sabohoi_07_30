@@ -184,7 +184,7 @@ app.get('/', (c) => {
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⛳</text></svg>">
   <title>사보회</title>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
-  <link href="/static/style.css?v=20260730r" rel="stylesheet">
+  <link href="/static/style.css?v=20260730s" rel="stylesheet">
 </head>
 <body>
   <header class="app-header" id="app-header">
@@ -321,7 +321,7 @@ app.get('/', (c) => {
     </div>
   </div>
 
-  <script src="/static/app.js?v=20260730r"></script>
+  <script src="/static/app.js?v=20260730s"></script>
 </body>
 </html>`)
 })
