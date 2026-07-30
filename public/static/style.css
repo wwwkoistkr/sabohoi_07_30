@@ -1,0 +1,651 @@
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+:root {
+  --green: #157347;
+  --green-dark: #0f5132;
+  --green-soft: #e8f5ee;
+  --gold: #f0a500;
+  --gold-dark: #c98800;
+  --grid: #dbe3e7;
+  --grid-strong: #b0bec5;
+  --bg: #f2f5f7;
+  --text: #1f2d33;
+  --muted: #607d8b;
+  --red: #d32f2f;
+  --total-bg: #fff8e1;
+  /* ── 컬럼 고정 폭(px). ch 단위는 폰트/브라우저마다 달라 정렬이 깨져 px로 고정 ── */
+  --w-no: 54px;      /* No: 숫자 3자리 */
+  --w-name: 132px;   /* 회원 이름: 한글 6자 */
+  --w-phone: 96px;   /* 양지번호: 숫자 6자리 */
+  --w-date: 92px;    /* 날짜/금액: 십만원(100,000) */
+  --w-total: 110px;  /* 합계 */
+}
+
+html {
+  /* 고해상도(레티나/4K/8K) 대응: rem 기준 스케일 + 선명한 렌더링 */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+html, body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+    "Malgun Gothic", "맑은 고딕", "Noto Sans KR", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100%;
+  font-size: 15px;
+  /* 폰트 안티앨리어싱: 고DPI 화면에서 글자를 선명하게 */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "tnum" 1;
+}
+/* 초고해상도(2K↑) 화면에서 기본 글자 살짝 키워 선명하게 */
+@media (min-resolution: 2dppx) {
+  body { font-size: 15.5px; }
+}
+@media (min-width: 1600px) {
+  html, body { font-size: 16.5px; }
+}
+@media (min-width: 2560px) {
+  html, body { font-size: 18px; }
+}
+/* 8K/초대형 화면: 표가 화면 가운데로 몰려 시원하게 */
+@media (min-width: 3840px) {
+  html, body { font-size: 22px; }
+}
+
+/* ===== Header ===== */
+.app-header {
+  position: sticky; top: 0; z-index: 30;
+  background: linear-gradient(135deg, #157347 0%, #0f5132 100%);
+  color: #fff;
+  box-shadow: 0 3px 12px rgba(15,81,50,.28);
+  /* 표가 옆으로 길어지면 헤더도 같이 가로 스크롤 → 버튼이 표 위를 따라감 */
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;   /* Firefox: 헤더 스크롤바 숨김 */
+}
+.app-header::-webkit-scrollbar { display: none; } /* Chrome/Safari: 숨김 */
+/* 헤더 안쪽 내용(제목+버튼). min-width를 JS가 표 너비에 맞춰 늘림 */
+.app-header-inner {
+  padding: 8px 14px;   /* 상하 여백 축소 → 버튼을 표(날짜/합계) 쪽으로 더 붙임 */
+  display: flex; align-items: center; justify-content: flex-start;
+  gap: 14px; flex-wrap: nowrap;   /* 한 줄로 이어져 표 길이만큼 확장 */
+  min-width: 100%;
+  width: max-content;
+}
+.app-header h1 {
+  font-size: 18px; font-weight: 800;
+  display: flex; align-items: center; gap: 8px; white-space: nowrap;
+  flex-shrink: 0;
+}
+.app-header h1 i { color: var(--gold); }
+.header-actions { display: flex; gap: 6px; flex-wrap: nowrap; flex-shrink: 0; }
+
+/* 숨겨진 날짜 선택기: '날짜추가' 버튼 위치에 겹쳐 두고 눈에는 안 보이게.
+   클릭 시 브라우저 기본 달력(캘린더)이 바로 뜨도록 함. */
+.date-picker-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  opacity: 0;
+  border: 0; padding: 0; margin: 0;
+  pointer-events: none;   /* 버튼 클릭을 막지 않도록 */
+}
+
+.btn {
+  border: none; border-radius: 9px;
+  padding: 8px 13px; font-size: 14px; font-weight: 700;
+  cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  transition: transform .05s, filter .15s, box-shadow .15s;
+  box-shadow: 0 1px 3px rgba(0,0,0,.12);
+}
+.btn:active { transform: scale(.95); }
+.btn:hover { box-shadow: 0 2px 6px rgba(0,0,0,.18); }
+.btn-light { background: #ffffff; color: var(--green-dark); }
+.btn-light:hover { filter: brightness(.96); }
+.btn-green { background: var(--green); color: #fff; }
+.btn-gray { background: #cfd8dc; color: var(--text); }
+.btn-gold { background: var(--gold); color: #3a2a00; }
+.btn-red { background: var(--red); color: #fff; }
+.btn-gold:hover, .btn-green:hover, .btn-gray:hover, .btn-red:hover { filter: brightness(.96); }
+.btn.admin-on { background: #ffe082; color: #5d4000; box-shadow: 0 0 0 2px #fff inset; }
+
+/* ===== Mode banner ===== */
+.mode-banner {
+  border-radius: 8px; padding: 6px 12px; margin-bottom: 6px;
+  font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px;
+}
+.mode-banner.mode-user { background: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }
+.mode-banner.mode-admin { background: #fff3e0; color: #e65100; border: 1px solid #ffb74d; }
+.mode-banner.mode-expand { background: #fff8e1; color: #b26a00; border: 1px solid #ffcc66; }
+.mode-banner b { font-weight: 800; }
+/* 아이콘을 제외한 안내 문구 전체를 하나의 흐름으로 묶어 단어가 자연스럽게 줄바꿈되게 함 */
+.mode-banner-text { flex: 1 1 auto; min-width: 0; }
+.mode-banner-text b { white-space: nowrap; }
+.banner-btn {
+  margin-left: auto; border: 1px solid currentColor; background: transparent;
+  color: inherit; font-weight: 700; font-size: 12px; padding: 3px 10px;
+  border-radius: 6px; cursor: pointer;
+}
+.banner-btn:hover { background: rgba(0,0,0,.06); }
+
+/* 잠긴(읽기전용) 입력칸 */
+.money-input.locked, .name-input.locked, .phone-input.locked {
+  cursor: default; background: transparent;
+}
+.money-input.locked:focus, .name-input.locked:focus, .phone-input.locked:focus {
+  outline: none; background: #f5f5f5;
+}
+.admin-note {
+  background: #fff3e0; border: 1px solid #ffb74d; color: #e65100;
+  border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-bottom: 14px;
+}
+.admin-note b { font-weight: 800; }
+.admin-top-btns { display: flex; gap: 8px; }
+
+/* ===== Main / Table ===== */
+.app-main { padding: 8px 10px 10px; }
+.table-wrap {
+  overflow: auto;
+  background: #fff;
+  border: 1px solid var(--grid-strong);
+  border-radius: 12px;
+  -webkit-overflow-scrolling: touch;
+  max-height: calc(100vh - 150px);
+  box-shadow: 0 6px 20px rgba(15,81,50,.10);
+  /* 표(합계 열까지)만큼만 폭을 차지하도록 축소 → 합계 오른쪽 흰 여백 제거.
+     화면보다 넓어지면 100%로 제한되어 가로 스크롤됨. */
+  width: -moz-fit-content;
+  width: fit-content;
+  max-width: 100%;
+}
+.sheet {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: max-content;   /* 지정한 컬럼 폭 합만큼만 차지(화면 채우려 늘어나지 않음) */
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  table-layout: fixed;
+}
+.sheet th, .sheet td {
+  border-right: 1px solid var(--grid);
+  border-bottom: 1px solid var(--grid);
+  overflow: hidden;
+}
+
+/* --- Header row --- */
+/* 헤더는 세로 스크롤 시 위에 고정(top sticky)만 사용.
+   좌우 컬럼 고정(left/right sticky)은 표가 작아 빈칸을 만들어 제거함. */
+.sheet thead th {
+  background: linear-gradient(180deg, #1a875191 0%, #157347 100%);
+  background-color: var(--green);
+  color: #fff;
+  font-weight: 700;
+  padding: 9px 6px;
+  text-align: center;
+  position: sticky; top: 0; z-index: 10;
+  white-space: nowrap;
+  border-bottom: 2px solid var(--green-dark);
+  letter-spacing: .3px;
+}
+/* 폭은 px 고정값. header/body/foot 모두 같은 값을 써야 정렬이 맞음 */
+.col-no    { width: var(--w-no);    min-width: var(--w-no); }
+.col-name  { width: var(--w-name);  min-width: var(--w-name); }
+.col-phone { width: var(--w-phone); min-width: var(--w-phone); }
+.col-date, .col-rank { width: var(--w-date); min-width: var(--w-date); }
+.col-date-group { background: var(--green) !important; border-left: 2px solid #f3cf57; }
+.sheet thead .date-group-row th { position: sticky; top: 0; z-index: 14; }
+.sheet thead .date-sub-row th { position: static; padding: 5px 3px; }
+.col-rank { background: #f3cf57 !important; color: #3a2a00 !important; }
+.col-total { width: var(--w-total); min-width: var(--w-total); background: var(--gold) !important; color: #3a2a00; }
+
+.date-head { display: flex; flex-direction: column; align-items: center; gap: 0; position: relative; }
+.date-head .date-text { font-size: 14px; font-weight: 800; }
+.date-head .date-sub { font-size: 10px; opacity: .8; }
+/* 날짜 칸 금액의 의미(예: '잃은 돈')를 헤더에 작게 표기 */
+.date-head .date-lost {
+  margin-top: 2px; font-size: 10px; font-weight: 700;
+  color: #3a2a00; background: var(--gold);
+  border-radius: 8px; padding: 1px 7px; line-height: 1.35;
+  white-space: nowrap;
+}
+.date-del {
+  position: absolute; top: -4px; right: -4px;
+  background: rgba(0,0,0,.18); border: none; color: #fff;
+  width: 17px; height: 17px; border-radius: 50%; cursor: pointer; font-size: 10px;
+  display: flex; align-items: center; justify-content: center;
+}
+.date-del:hover { background: var(--red); }
+
+/* --- column resize handle --- */
+.col-resize {
+  position: absolute; top: 0; right: 0; width: 8px; height: 100%;
+  cursor: col-resize; z-index: 15; user-select: none;
+  touch-action: none;
+}
+.col-resize::after {
+  content: ''; position: absolute; top: 20%; right: 3px; height: 60%; width: 2px;
+  background: rgba(255,255,255,.4); border-radius: 2px;
+}
+.col-resize:hover::after { background: #fff; }
+
+/* ===== 좌우 틀 고정(엑셀식) =====
+   No 열은 왼쪽(left:0), 합계 열은 오른쪽(right:0)에 항상 고정.
+   left:0 / right:0 은 오프셋 계산이 없어 흰 빈칸이 생기지 않음(빈칸 버그 회피). */
+.col-no, .cell-no {
+  position: sticky; left: 0; z-index: 6;
+}
+.sheet thead th.col-no { z-index: 14; }      /* 헤더 No: 가로+세로 모두 위 */
+/* 풋 No: 왼쪽+아래 모두 고정. 폭·배경을 No 열과 동일하게 */
+.sheet tfoot td.foot-no {
+  position: sticky; left: 0; bottom: 0; z-index: 12;
+  width: var(--w-no); min-width: var(--w-no);
+  background: var(--green-soft);
+  border-right: 1px solid var(--grid);
+}
+.col-total, .cell-total {
+  position: sticky; right: 0; z-index: 6;
+}
+.sheet thead th.col-total { z-index: 14; }
+.sheet tfoot td.foot-grand { position: sticky; right: 0; bottom: 0; z-index: 13; }
+
+.cell-no {
+  background: var(--green-soft);
+  color: var(--green-dark);
+  font-weight: 700;
+  text-align: center;
+  padding: 0 3px;
+  position: sticky; left: 0; z-index: 6;
+}
+/* 회원 행 삭제 버튼: No 숫자 아래에 작은 빨간 원형 x (모바일에서도 누르기 쉽게) */
+.cell-no { position: relative; }
+.row-del {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; margin: 3px auto 0;
+  background: #fde8e8; border: 1px solid #f5b5b5; border-radius: 50%;
+  color: #d9534f; cursor: pointer; font-size: 11px; line-height: 1;
+  padding: 0; -webkit-tap-highlight-color: transparent;
+}
+.row-del:hover, .row-del:active { background: var(--red); border-color: var(--red); color: #fff; }
+/* 좁은 화면(모바일)에서는 No 셀이 매우 좁아지므로 버튼을 숫자 아래 블록으로 */
+.cell-no { line-height: 1.1; }
+.cell-no .row-del { display: flex; }
+
+/* --- Input cells --- 헤더가 가운데 정렬이므로 입력칸도 전부 가운데 정렬 --- */
+.cell-name, .cell-phone, .cell-money { padding: 0; background: #fff; }
+.cell-rank { background: #fff9dc; color: var(--green-dark); font-weight: 900; text-align: center; padding: 10px 4px; border-right: 2px solid #f3cf57; }
+.cell-name input, .cell-phone input, .cell-money input {
+  width: 100%; border: none; background: transparent;
+  padding: 10px 6px; font-size: 14px; color: var(--text);
+  text-align: center; text-overflow: ellipsis;
+}
+.name-input { font-weight: 700; }
+.phone-input { color: var(--muted); font-size: 13px; letter-spacing: .5px; }
+.money-input { text-align: right; padding-right: 10px; font-variant-numeric: tabular-nums; }
+.money-input.has-val { color: var(--red); font-weight: 700; }
+.cell-name input::placeholder, .cell-phone input::placeholder,
+.money-input::placeholder { color: #cbd5da; font-weight: 400; font-size: 11px; }
+
+.cell-name input:focus, .cell-phone input:focus, .cell-money input:focus {
+  outline: 2px solid var(--gold); outline-offset: -2px; background: #fffef5;
+}
+
+/* zebra */
+.sheet tbody tr:nth-child(even) .cell-name,
+.sheet tbody tr:nth-child(even) .cell-phone,
+.sheet tbody tr:nth-child(even) .cell-money { background: #fafbfc; }
+.sheet tbody tr:nth-child(even) .cell-rank { background: #fff5c7; }
+.sheet tbody tr:nth-child(even) .cell-no { background: #dcefe4; }
+.sheet tbody tr:hover td { background: #f1f8f4; }
+
+/* --- 접힘(숨김 날짜) 열 --- */
+/* 날짜가 많아 화면을 넘어가면 가운데 오래된 날짜를 이 한 열로 접어서 표시.
+   눌러서 전체 펼치기 가능. 폭은 좁게. */
+.col-fold, .cell-fold, .foot-fold {
+  width: 34px; min-width: 34px; max-width: 34px;
+  cursor: pointer;
+  padding: 0 2px !important;
+}
+.sheet thead th.col-fold {
+  background: #0f5132; color: #ffe082;
+}
+.fold-head { display: flex; flex-direction: column; align-items: center; line-height: 1.05; }
+.fold-dots { font-size: 15px; font-weight: 900; letter-spacing: 1px; }
+.fold-cnt { font-size: 9px; opacity: .9; }
+.cell-fold {
+  background: #f1faf4; color: #6b8f7c;
+  text-align: right; font-size: 11px; font-weight: 700;
+  border-left: 1px dashed #b5d8c4; border-right: 1px dashed #b5d8c4;
+}
+.sheet tbody tr:nth-child(even) .cell-fold { background: #e7f3ec; }
+.foot-fold { background: #dbeee2; color: var(--green-dark); font-size: 11px; }
+.col-fold:hover, .cell-fold:hover { filter: brightness(.97); }
+
+/* --- Total column (right) --- */
+.cell-total {
+  background: var(--total-bg);
+  color: var(--red);
+  font-weight: 800;
+  text-align: right;
+  padding: 10px 10px;
+  border-left: 2px solid var(--gold);
+  font-size: 14px;
+}
+
+/* --- Footer --- */
+.sheet tfoot td {
+  position: sticky; bottom: 0; z-index: 8;
+  background: var(--green-soft);
+  color: var(--green-dark);
+  font-weight: 800;
+  padding: 9px 6px;
+  text-align: right;
+  border-top: 2px solid var(--green);
+  font-size: 13px;
+}
+.sheet tfoot td.foot-label {
+  z-index: 11; text-align: left;
+  white-space: nowrap;
+}
+.sheet tfoot td.foot-label i { margin-right: 5px; }
+.sheet tfoot td.foot-winner { min-width: var(--w-date); background: #fff9dc; color: #8a5a00; text-align: center; white-space: normal; line-height: 1.2; font-size: 11px; border-right: 2px solid #f3cf57; }
+.sheet tfoot td.foot-best-score { text-align: center; color: var(--green-dark); }
+.sheet tfoot td.foot-grand {
+  z-index: 13;
+  background: var(--green-dark); color: #fff; font-size: 15px;
+  border-left: 2px solid var(--gold);
+}
+
+/* ===== 지출액 / 잔액 행 (날짜별 합계 행과 같은 선상으로 표에 이어붙임) ===== */
+/* 행 전체 기본 배경/테두리 */
+.sheet tfoot tr.foot-extra-row td {
+  border-top: 1px solid var(--green);
+  background: var(--green-soft);
+}
+/* 라벨 셀: No열 오른쪽에 왼쪽 고정(sticky left) — 날짜별 합계의 foot-label과 동일 동작 */
+.sheet tfoot td.foot-extra-label {
+  position: sticky; left: var(--w-no); z-index: 11;
+  text-align: left; white-space: nowrap;
+  background: var(--green-soft); color: var(--green-dark);
+  font-weight: 800;
+}
+.sheet tfoot td.foot-extra-label i { margin-right: 5px; }
+/* 날짜 자리 빈 셀(정렬용) */
+.sheet tfoot td.foot-extra-filler { background: var(--green-soft); }
+/* 금액 셀: 합계 열과 동일하게 오른쪽 고정(sticky right) → 합계열과 정렬 */
+.sheet tfoot td.foot-extra-cell {
+  position: sticky; right: 0; bottom: 0; z-index: 13;
+  padding: 0;
+  background: #fffef2;
+  border-left: 2px solid var(--gold);
+  width: var(--w-total); min-width: var(--w-total);
+}
+.sheet tfoot td.foot-extra-cell .extra-input {
+  width: 100%; box-sizing: border-box;
+  border: none; background: transparent;
+  padding: 9px 6px; text-align: right;
+  font-size: 15px; font-weight: 800; color: var(--green-dark);
+  outline: none;
+  -webkit-appearance: none; appearance: none;
+  border-radius: 0;
+}
+.sheet tfoot td.foot-extra-cell .extra-input:focus {
+  background: #fff9d6;
+  box-shadow: inset 0 0 0 2px var(--gold);
+}
+.sheet tfoot td.foot-extra-cell .extra-input::placeholder { color: #b0b0b0; font-weight: 600; }
+.sheet tfoot td.foot-extra-cell .extra-input.has-val { color: var(--green-dark); }
+/* 잔액: 자동 계산 표시 셀(입력 불가) */
+.sheet tfoot td.foot-balance-cell {
+  padding: 9px 6px; text-align: right;
+  font-size: 15px; font-weight: 800; color: var(--green-dark);
+  background: var(--green-soft);
+  border-left: 2px solid var(--gold);
+}
+.sheet tfoot td.foot-balance-cell.neg { color: #c0392b; }
+.sheet tfoot td.foot-total-cell { padding: 9px 12px; text-align: right; font-size: 15px; font-weight: 900; color: #fff; background: var(--green-dark); }
+.sheet tfoot td.foot-extra-cell { position: static; width: auto; min-width: 0; }
+.sheet tfoot td.foot-date-value { text-align: center; border-left: 1px solid var(--gold); }
+.sheet tfoot td.foot-date-value .extra-input { text-align: center; }
+
+/* ===== Admin panel ===== */
+.admin-panel { max-width: 900px; margin: 0 auto; }
+.admin-top {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px;
+}
+.admin-top h2 { font-size: 20px; color: var(--green-dark); display: flex; align-items: center; gap: 8px; }
+.admin-cards { display: grid; gap: 14px; }
+.admin-card {
+  background: #fff; border: 1px solid var(--grid); border-radius: 12px;
+  padding: 16px; box-shadow: 0 3px 12px rgba(0,0,0,.06);
+}
+.admin-card h3 { font-size: 16px; color: var(--green-dark); margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.admin-desc { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+.admin-summary { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.summary-item {
+  background: var(--green-soft); border-radius: 10px; padding: 12px 16px;
+  text-align: center; min-width: 90px; flex: 1;
+}
+.summary-item .num { font-size: 24px; font-weight: 800; color: var(--green-dark); }
+.summary-item .lbl { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.admin-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.file-btn { position: relative; overflow: hidden; }
+
+.asset-add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.asset-add input[type=text] {
+  border: 1px solid var(--grid); border-radius: 7px; padding: 9px 12px;
+  font-size: 14px; flex: 1; min-width: 160px;
+}
+.asset-add input[type=text]:focus { outline: 2px solid var(--green); border-color: var(--green); }
+#asset-file-name { font-size: 13px; color: var(--green); }
+
+.asset-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; }
+.asset-item {
+  border: 1px solid var(--grid); border-radius: 10px; overflow: hidden;
+  background: #fafbfc; position: relative;
+}
+.asset-item img { width: 100%; height: 110px; object-fit: cover; cursor: pointer; display: block; background: #eceff1; }
+.asset-item .asset-cap { padding: 7px 8px; font-size: 13px; font-weight: 600; color: var(--text); word-break: break-all; }
+.asset-item .asset-del {
+  position: absolute; top: 6px; right: 6px;
+  background: rgba(211,47,47,.9); color: #fff; border: none;
+  width: 24px; height: 24px; border-radius: 50%; cursor: pointer; font-size: 12px;
+}
+.asset-item .asset-edit {
+  position: absolute; top: 6px; left: 6px;
+  background: rgba(21,115,71,.92); color: #fff; border: none;
+  width: 24px; height: 24px; border-radius: 50%; cursor: pointer; font-size: 11px;
+}
+.asset-item .asset-edit:hover { background: var(--green-dark); }
+.asset-empty { color: var(--muted); font-size: 14px; padding: 20px; text-align: center; grid-column: 1/-1; }
+
+/* ===== 화면 문구 수정 ===== */
+.label-edit { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 12px; }
+.label-edit .lbl-row { display: flex; align-items: center; gap: 10px; }
+.label-edit .lbl-row span {
+  flex: 0 0 96px; font-size: 13px; font-weight: 700; color: var(--green-dark);
+}
+.label-edit .lbl-row input {
+  flex: 1; border: 1px solid var(--grid); border-radius: 6px;
+  padding: 8px 10px; font-size: 14px; min-width: 0;
+}
+.label-edit .lbl-row input:focus { outline: 2px solid var(--green); border-color: var(--green); }
+
+/* ===== 날짜 관리(금액 비우기 · 날짜 삭제) ===== */
+.date-manage-list { display: flex; flex-direction: column; gap: 8px; }
+.date-manage-empty { color: var(--muted); font-size: 13px; padding: 8px 2px; }
+.date-manage-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  flex-wrap: wrap;
+  border: 1px solid var(--grid); border-radius: 8px; padding: 10px 12px;
+  background: #fafcfd;
+}
+.date-manage-row .dm-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.date-manage-row .dm-date { font-size: 15px; font-weight: 800; color: var(--green-dark); }
+.date-manage-row .dm-sub { font-size: 12px; color: var(--muted); }
+.date-manage-row .dm-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.date-manage-row .dm-btns .btn { padding: 7px 11px; font-size: 13px; }
+.date-manage-row .dm-clear[disabled] { opacity: .45; cursor: not-allowed; }
+
+/* ===== Modal ===== */
+.modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,.5);
+  display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px;
+}
+.modal-box {
+  background: #fff; border-radius: 14px; padding: 22px;
+  width: 100%; max-width: 340px; box-shadow: 0 12px 40px rgba(0,0,0,.3);
+}
+.modal-box h3 { font-size: 18px; margin-bottom: 16px; color: var(--green-dark); display: flex; align-items: center; gap: 8px; }
+.modal-box label { display: block; font-size: 13px; color: var(--muted); font-weight: 600; margin-bottom: 12px; }
+.modal-box label input {
+  display: block; width: 100%; margin-top: 5px;
+  border: 1px solid var(--grid); border-radius: 8px; padding: 10px 12px; font-size: 15px;
+}
+.modal-box label input:focus { outline: 2px solid var(--green); border-color: var(--green); }
+.login-error { color: var(--red); font-size: 13px; margin: -4px 0 10px; }
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
+
+.img-view { position: relative; max-width: 92vw; max-height: 90vh; text-align: center; }
+.img-view img { max-width: 92vw; max-height: 80vh; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+.img-caption { color: #fff; margin-top: 10px; font-size: 15px; font-weight: 600; }
+.img-close {
+  position: absolute; top: -14px; right: -14px; width: 36px; height: 36px;
+  border-radius: 50%; background: #fff; border: none; cursor: pointer; font-size: 16px; color: var(--text);
+}
+
+/* ===== 천원 단위 빠른입력 팝오버 ===== */
+.quick-pad {
+  position: fixed; z-index: 90;
+  width: 236px;
+  background: #fff;
+  border: 1px solid var(--grid-strong);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(15,81,50,.22);
+  padding: 10px;
+  animation: qp-pop .12s ease-out;
+}
+@keyframes qp-pop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+.quick-pad-cur {
+  text-align: center; font-size: 17px; font-weight: 800; color: var(--red);
+  background: var(--total-bg); border-radius: 8px; padding: 7px 0; margin-bottom: 9px;
+  font-variant-numeric: tabular-nums;
+}
+.quick-pad-cur span { font-size: 19px; }
+.quick-pad-btns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+.qp-btn {
+  border: none; border-radius: 9px; padding: 12px 0;
+  font-size: 15px; font-weight: 800; cursor: pointer;
+  background: var(--green-soft); color: var(--green-dark);
+  transition: transform .05s, filter .15s;
+}
+.qp-btn:hover { filter: brightness(.96); }
+.qp-btn:active { transform: scale(.93); }
+.qp-clear { background: #ffe0e0; color: var(--red); }
+.quick-pad-foot { margin-top: 9px; }
+.qp-done {
+  width: 100%; border: none; border-radius: 9px; padding: 11px 0;
+  font-size: 15px; font-weight: 800; cursor: pointer;
+  background: var(--green); color: #fff;
+}
+.qp-done:active { transform: scale(.97); }
+
+.hidden { display: none !important; }
+
+/* ===== 좁은 컬럼 폭: 900px 이하 모든 기기(큰 폰·가로화면·태블릿 포함) =====
+   ⚠️ 중요: 컬럼 폭 축소는 반드시 넓은 범위(900px)에 둔다.
+   과거엔 640px 이하에서만 좁혀서, 641px 이상으로 인식되는 기기(대형 스마트폰/
+   태블릿/가로모드)에서 데스크탑용 넓은 양지번호(96px)가 나와 다른 컬럼을
+   밀어내는 문제가 있었음. 이 블록은 오직 컬럼 폭만 담당한다. */
+@media (max-width: 900px) {
+  :root {
+    --w-no: 30px;
+    --w-name: 68px;    /* 회원 이름: 좁게 (2~3자 충분, 긴 이름은 칸 안 스크롤) */
+    --w-phone: 50px;   /* 양지번호: 좁게 고정 → 다른 컬럼이 밀리지 않음 */
+    --w-date: 82px;    /* 날짜/잃은 돈 */
+    --w-total: 78px;   /* 합계 */
+  }
+  /* 좁은 칸에 맞춰 헤더 글자를 작게 + 2줄 허용(칸 폭이 헤더 글자에 눌려 안 줄어드는 것 방지) */
+  .sheet thead th { padding: 9px 2px; font-size: 12px; letter-spacing: 0; }
+  .sheet thead th.col-name, .sheet thead th.col-phone { white-space: normal; word-break: keep-all; line-height: 1.15; }
+  .date-head .date-lost { font-size: 9px; padding: 1px 5px; }
+  .cell-name input { font-size: 12.5px; }
+  .cell-phone input { font-size: 12px; letter-spacing: 0; }
+  .cell-name input::placeholder, .cell-phone input::placeholder { font-size: 10px; }
+}
+
+/* ===== Mobile first: 좁은 화면 UI(폰트/버튼/헤더) 최적화 ===== */
+@media (max-width: 640px) {
+  /* 모바일 헤더: 표가 길어도 헤더는 가로 스크롤하지 않고 화면폭에 고정.
+     제목줄 + 버튼줄 2단으로 나눠 5개 버튼이 한 화면에 꽉 차게 배치. */
+  .app-header { padding: 0; overflow-x: hidden; }
+  .app-header-inner {
+    min-width: 0 !important; width: 100% !important;
+    flex-wrap: wrap; gap: 8px; padding: 8px 10px;
+    justify-content: space-between;
+  }
+  .app-header h1 { font-size: 16px; flex: 0 0 auto; }
+  /* 버튼 5개를 한 줄에 균등 분배(화면폭 안에서 붙여서 꽉 채움).
+     PC처럼 아이콘+글씨를 함께 보이게 하되, 글씨를 작게 줄여 5개가 다 들어가게 한다. */
+  .header-actions {
+    width: 100%; gap: 4px; flex-wrap: nowrap; justify-content: space-between;
+  }
+  .header-actions .btn {
+    flex: 1 1 0; min-width: 0; justify-content: center;
+    padding: 7px 2px; font-size: 10.5px; border-radius: 8px;
+    white-space: nowrap; overflow: hidden;
+  }
+  /* 모바일에서도 버튼 글씨(회원추가·날짜추가 등)를 아이콘과 함께 표시 */
+  .header-actions .btn .btn-text {
+    display: inline; font-size: 10.5px; margin-left: 1px;
+  }
+  .header-actions .btn i { margin: 0; font-size: 11px; }
+  /* '날짜펼치기'처럼 글자가 긴 버튼은 글씨를 더 작게 하여 5개 버튼 균형 유지 */
+  .header-actions .btn .btn-text-sm { font-size: 9px; letter-spacing: -0.3px; }
+  /* 상단 안내 메시지: 모바일에서도 PC처럼 자연스럽게 한 문장으로 보이게(글씨만 줄임) */
+  .mode-banner {
+    font-size: 11px; padding: 7px 10px; line-height: 1.35;
+    align-items: flex-start; gap: 6px;
+  }
+  .mode-banner i { margin-top: 1px; }
+  /* 모바일에서는 컬럼 드래그 리사이즈 핸들을 숨긴다(불안정 방지, 고정폭 유지) */
+  .col-resize { display: none !important; }
+  .table-wrap { max-height: calc(100vh - 120px); }
+  .sheet { font-size: 13px; }
+  .cell-name input, .cell-phone input, .cell-money input { padding: 9px 3px; font-size: 13px; }
+  .admin-cards { grid-template-columns: 1fr; }
+  .asset-list { grid-template-columns: repeat(auto-fill, minmax(46%, 1fr)); }
+  /* 날짜 관리: 좁은 화면에서 정보 위 / 버튼 아래로 배치, 버튼은 폭 채움 */
+  .date-manage-row { flex-direction: column; align-items: stretch; }
+  .date-manage-row .dm-btns { width: 100%; }
+  .date-manage-row .dm-btns .btn { flex: 1; justify-content: center; }
+}
+
+/* ===== 실제 스마트폰(≤480px): 고정열을 더 좁혀 날짜를 2~3일 보이게 =====
+   No/이름/양지번호/합계 고정폭을 최소화하고 날짜 폭도 줄여, 좁은 폰에서도
+   날짜가 1일만 나오지 않고 여러 날 + 접힘(···+N일)이 함께 보이도록 한다. */
+@media (max-width: 480px) {
+  :root {
+    --w-no: 22px;
+    --w-name: 50px;    /* 이름: 더 좁게(2~3자, 긴 이름은 칸 안 스크롤) */
+    --w-phone: 38px;   /* 양지번호: 최소폭 */
+    --w-date: 58px;    /* 날짜/잃은 돈: 좁혀서 항상 3일 확보 */
+    --w-total: 56px;   /* 합계 */
+  }
+  .sheet thead th { padding: 8px 1px; font-size: 10.5px; }
+  .date-head .date-text { font-size: 11.5px; }
+  .date-head .date-sub { font-size: 8.5px; }
+  .date-head .date-lost { font-size: 8px; padding: 1px 3px; }
+  .cell-money input { font-size: 11.5px; padding: 9px 1px; }
+  .cell-name input { font-size: 11.5px; }
+  .cell-phone input { font-size: 11px; }
+  .col-total, .foot-grand { font-size: 11.5px; }
+  .app-main { padding: 6px 4px 8px; }
+}
+
+/* 큰 화면에서는 자료실 2열 */
+@media (min-width: 720px) {
+  .admin-cards { grid-template-columns: 1fr; }
+}
