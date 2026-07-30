@@ -454,7 +454,7 @@ function baseTotalAmount() {
   }
 
   function renderFoot() {
-    var h = '<tr class="foot-winner-row"><td class="foot-no"></td><td class="foot-label" colspan="2"><i class="fas fa-trophy"></i>날짜별 1등</td>';
+    var h = '<tr class="foot-winner-row"><td class="foot-label" colspan="3"><i class="fas fa-trophy"></i>날짜별 1등</td>';
     if (_vd.hiddenCount > 0) h += '<td class="foot-fold"></td>';
     _vd.visible.forEach(function (d) {
       h += '<td colspan="2" class="foot-winner" data-winner-date="' + d.id + '">' + escapeHtml(dateWinnerNames(d.id)) + '</td>';
@@ -464,9 +464,9 @@ function baseTotalAmount() {
     var valueSpan = (_vd.hiddenCount > 0 ? 1 : 0) + (_vd.visible.length * 2);
     if (valueSpan < 1) valueSpan = 1;
     var total = currentTotalAmount();
-    h += '<tr class="foot-extra-row foot-total-row"><td class="foot-no"></td><td class="foot-extra-label" colspan="2"><i class="fas fa-coins"></i>총액</td><td colspan="' + valueSpan + '" class="foot-extra-cell foot-total-cell"><input type="text" inputmode="numeric" pattern="[0-9]*" class="extra-input total-input has-val" data-total-amount="1" value="' + fmt(total) + '" placeholder="0" /></td></tr>';
+    h += '<tr class="foot-extra-row foot-total-row"><td class="foot-extra-label" colspan="3"><i class="fas fa-coins"></i>총액</td><td colspan="' + valueSpan + '" class="foot-extra-cell foot-total-cell"><input type="text" inputmode="numeric" pattern="[0-9]*" class="extra-input total-input has-val" data-total-amount="1" value="' + fmt(total) + '" placeholder="0" /></td></tr>';
 
-    h += '<tr class="foot-extra-row foot-expense-row"><td class="foot-no"></td><td class="foot-extra-label" colspan="2"><i class="fas fa-money-bill-wave"></i>날짜별 지출</td>';
+    h += '<tr class="foot-extra-row foot-expense-row"><td class="foot-extra-label" colspan="3"><i class="fas fa-money-bill-wave"></i>날짜별 지출</td>';
     if (_vd.hiddenCount > 0) h += '<td class="foot-extra-filler"></td>';
     _vd.visible.forEach(function (d) {
       var ex = expenseFor(d.id);
@@ -474,7 +474,7 @@ function baseTotalAmount() {
     });
     h += '</tr>';
 
-    h += '<tr class="foot-extra-row foot-balance-row"><td class="foot-no"></td><td class="foot-extra-label" colspan="2"><i class="fas fa-wallet"></i>날짜별 잔액</td>';
+    h += '<tr class="foot-extra-row foot-balance-row"><td class="foot-extra-label" colspan="3"><i class="fas fa-wallet"></i>날짜별 잔액</td>';
     if (_vd.hiddenCount > 0) h += '<td class="foot-extra-filler"></td>';
     _vd.visible.forEach(function (d) {
       var balance = balanceFor(d.id);

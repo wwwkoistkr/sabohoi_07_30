@@ -17,7 +17,8 @@
   --w-no: 54px;      /* No: 숫자 3자리 */
   --w-name: 132px;   /* 회원 이름: 한글 6자 */
   --w-phone: 96px;   /* 양지번호: 숫자 6자리 */
-  --w-date: 92px;    /* 날짜/금액: 십만원(100,000) */
+  --w-date: 64px;
+  --w-rank: 44px;    /* 날짜/금액: 십만원(100,000) */
   --w-total: 110px;  /* 합계 */
 }
 
@@ -193,7 +194,8 @@ html, body {
 .col-no    { width: var(--w-no);    min-width: var(--w-no); }
 .col-name  { width: var(--w-name);  min-width: var(--w-name); }
 .col-phone { width: var(--w-phone); min-width: var(--w-phone); }
-.col-date, .col-rank { width: var(--w-date); min-width: var(--w-date); }
+.col-date { width: var(--w-date); min-width: var(--w-date); }
+.col-rank { width: var(--w-rank); min-width: var(--w-rank); }
 .col-date-group { background: var(--green) !important; border-left: 2px solid #f3cf57; }
 .sheet thead .date-group-row th { position: sticky; top: 0; z-index: 14; }
 .sheet thead .date-sub-row th { position: static; padding: 5px 3px; }
@@ -350,7 +352,7 @@ html, body {
 }
 .sheet tfoot td.foot-label i { margin-right: 5px; }
 .sheet tfoot td.foot-winner {
-  min-width: calc(var(--w-date) * 2);
+  min-width: calc(var(--w-date) + var(--w-rank));
   background: #eef1f3; color: #111;
   text-align: center; vertical-align: middle;
   white-space: normal; line-height: 1.25;
@@ -374,7 +376,7 @@ html, body {
 }
 /* 라벨 셀: No열 오른쪽에 왼쪽 고정(sticky left) — 날짜별 합계의 foot-label과 동일 동작 */
 .sheet tfoot td.foot-extra-label {
-  position: sticky; left: var(--w-no); z-index: 11;
+  position: sticky; left: 0; z-index: 11;
   text-align: left; white-space: nowrap;
   background: var(--green-soft); color: var(--green-dark);
   font-weight: 800;
@@ -586,7 +588,8 @@ html, body {
     --w-no: 30px;
     --w-name: 68px;    /* 회원 이름: 좁게 (2~3자 충분, 긴 이름은 칸 안 스크롤) */
     --w-phone: 50px;   /* 양지번호: 좁게 고정 → 다른 컬럼이 밀리지 않음 */
-    --w-date: 82px;    /* 날짜/잃은 돈 */
+    --w-date: 48px;
+    --w-rank: 34px;    /* 날짜/잃은 돈 */
     --w-total: 78px;   /* 합계 */
   }
   /* 좁은 칸에 맞춰 헤더 글자를 작게 + 2줄 허용(칸 폭이 헤더 글자에 눌려 안 줄어드는 것 방지) */
@@ -653,7 +656,8 @@ html, body {
     --w-no: 22px;
     --w-name: 50px;    /* 이름: 더 좁게(2~3자, 긴 이름은 칸 안 스크롤) */
     --w-phone: 38px;   /* 양지번호: 최소폭 */
-    --w-date: 58px;    /* 날짜/잃은 돈: 좁혀서 항상 3일 확보 */
+    --w-date: 38px;
+    --w-rank: 26px;    /* 날짜/잃은 돈: 좁혀서 항상 3일 확보 */
     --w-total: 56px;   /* 합계 */
   }
   .sheet thead th { padding: 8px 1px; font-size: 10.5px; }
