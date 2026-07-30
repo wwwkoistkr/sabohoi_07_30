@@ -51,6 +51,7 @@
   function normalizeExtra(saved) {
     var out = { expenses: {} };
     if (saved && typeof saved === 'object') {
+      if (Object.prototype.hasOwnProperty.call(saved, 'total')) out.total = Number(saved.total) || 0;
       if (saved.expenses && typeof saved.expenses === 'object') {
         Object.keys(saved.expenses).forEach(function (dateId) { out.expenses[dateId] = Number(saved.expenses[dateId]) || 0; });
       } else if (Number(saved.expense) > 0) {
@@ -74,7 +75,10 @@
     });
     return total;
   }
-  function balanceFor(dateId) { return grandTotal() - totalExpensesThrough(dateId); }
+  function totalAmount() {
+    return state.extra && Object.prototype.hasOwnProperty.call(state.extra, 'total') ? (Number(state.extra.total) || 0) : grandTotal();
+  }
+  function balanceFor(dateId) { return totalAmount() - totalExpensesThrough(dateId); }
   // 화면에 쓰이는 문구 기본값 (관리자 모드에서 수정 가능)
   function defaultLabels() {
     return {
@@ -454,7 +458,8 @@
 
     var valueSpan = (_vd.hiddenCount > 0 ? 1 : 0) + (_vd.visible.length * 2);
     if (valueSpan < 1) valueSpan = 1;
-    h += '<tr class="foot-extra-row foot-total-row"><td class="foot-no"></td><td class="foot-extra-label" colspan="2"><i class="fas fa-coins"></i>총액</td><td colspan="' + valueSpan + '" class="foot-extra-cell foot-total-cell" data-grand-total>' + fmt(grandTotal()) + '</td></tr>';
+    var total = totalAmount();
+    h += '<tr class="foot-extra-row foot-total-row"><td class="foot-no"></td><td class="foot-extra-label" colspan="2"><i class="fas fa-coins"></i>총액</td><td colspan="' + valueSpan + '" class="foot-extra-cell foot-total-cell"><input type="text" inputmode="numeric" pattern="[0-9]*" class="extra-input total-input has-val" data-total-amount="1" value="' + fmt(total) + '" placeholder="0" /></td></tr>';
 
     h += '<tr class="foot-extra-row foot-expense-row"><td class="foot-no"></td><td class="foot-extra-label" colspan="2"><i class="fas fa-money-bill-wave"></i>날짜별 지출</td>';
     if (_vd.hiddenCount > 0) h += '<td class="foot-extra-filler"></td>';
@@ -503,7 +508,7 @@
       var score = foot.querySelector('[data-col="date:' + d.id + '"]');
       if (score && score.classList.contains('foot-best-score')) score.textContent = dateBestScore(d.id) || '';
     });
-    var g = foot.querySelector('[data-grand-total]'); if (g) g.textContent = fmt(grandTotal());
+    var g = foot.querySelector('[data-total-amount]'); if (g && document.activeElement !== g) g.value = fmt(totalAmount());
     refreshBalance();
   }
 
@@ -557,10 +562,14 @@
     var num = parseNum(t.value); // 콤마·비숫자 무시, 숫자만
     if (num < 0) num = 0;
     if (!state.extra) state.extra = { expenses: {} };
-    if (!state.extra.expenses) state.extra.expenses = {};
-    var expenseDateId = t.getAttribute('data-expense-date');
-    state.extra.expenses[expenseDateId] = num;
-    delete state.extra.legacyExpense;
+    if (t.hasAttribute('data-total-amount')) {
+      state.extra.total = num;
+    } else {
+      if (!state.extra.expenses) state.extra.expenses = {};
+      var expenseDateId = t.getAttribute('data-expense-date');
+      state.extra.expenses[expenseDateId] = num;
+      delete state.extra.legacyExpense;
+    }
     t.classList.toggle('has-val', !!num);
     // ── 입력 중 실시간 천단위 콤마 + 커서 보정 ──
     var before = t.value;
@@ -889,7 +898,7 @@
     state.dates.forEach(function (d) { winnerRow.push(dateBestScore(d.id) || ''); winnerRow.push(dateWinnerNames(d.id)); });
     rows.push(winnerRow);
     var span = state.dates.length * 2;
-    var totalRow = ['', '총액', '']; for (var i = 0; i < span - 1; i++) totalRow.push(''); totalRow.push(grandTotal()); rows.push(totalRow);
+    var totalRow = ['', '총액', '']; for (var i = 0; i < span - 1; i++) totalRow.push(''); totalRow.push(totalAmount()); rows.push(totalRow);
     var expRow = ['', '날짜별 지출', '']; state.dates.forEach(function (d) { expRow.push(expenseFor(d.id)); expRow.push(''); }); rows.push(expRow);
     var balRow = ['', '날짜별 잔액', '']; state.dates.forEach(function (d) { balRow.push(balanceFor(d.id)); balRow.push(''); }); rows.push(balRow);
     var csv = rows.map(function (r) { return r.map(function (c) { var v = String(c == null ? '' : c); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(','); }).join('\n');

@@ -360,7 +360,7 @@ html, body {
 /* ===== 지출액 / 잔액 행 (날짜별 합계 행과 같은 선상으로 표에 이어붙임) ===== */
 /* 행 전체 기본 배경/테두리 */
 .sheet tfoot tr.foot-extra-row td {
-  border-top: 1px solid var(--green);
+  border-top: 2px solid var(--gold);
   background: var(--green-soft);
 }
 /* 라벨 셀: No열 오른쪽에 왼쪽 고정(sticky left) — 날짜별 합계의 foot-label과 동일 동작 */
@@ -404,10 +404,19 @@ html, body {
   border-left: 2px solid var(--gold);
 }
 .sheet tfoot td.foot-balance-cell.neg { color: #c0392b; }
-.sheet tfoot td.foot-total-cell { padding: 9px 12px; text-align: right; font-size: 15px; font-weight: 900; color: #fff; background: var(--green-dark); }
+.sheet tfoot td.foot-total-cell {
+  padding: 0; background: var(--gold); border-left: 2px solid var(--gold-dark);
+}
+.sheet tfoot td.foot-total-cell .total-input {
+  color: #3a2a00; background: var(--gold); font-weight: 900;
+  padding-right: 12px; text-align: right;
+}
+.sheet tfoot td.foot-total-cell .total-input:focus {
+  background: #ffc94d; box-shadow: inset 0 0 0 2px var(--gold-dark);
+}
 .sheet tfoot td.foot-extra-cell { position: static; width: auto; min-width: 0; }
-.sheet tfoot td.foot-date-value { text-align: center; border-left: 1px solid var(--gold); }
-.sheet tfoot td.foot-date-value .extra-input { text-align: center; }
+.sheet tfoot td.foot-date-value { text-align: right; padding-right: 12px; border-left: 2px solid var(--gold); }
+.sheet tfoot td.foot-date-value .extra-input { text-align: right; padding-right: 12px; }
 
 /* ===== Admin panel ===== */
 .admin-panel { max-width: 900px; margin: 0 auto; }
