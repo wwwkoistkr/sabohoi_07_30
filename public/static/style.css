@@ -586,7 +586,7 @@ html, body {
 @media (max-width: 900px) {
   :root {
     --w-no: 30px;
-    --w-name: 68px;    /* 회원 이름: 좁게 (2~3자 충분, 긴 이름은 칸 안 스크롤) */
+    --w-name: 56px;    /* 회원 이름: 한글 4자 기준 */
     --w-phone: 50px;   /* 양지번호: 좁게 고정 → 다른 컬럼이 밀리지 않음 */
     --w-date: 48px;
     --w-rank: 34px;    /* 날짜/잃은 돈 */
@@ -654,7 +654,7 @@ html, body {
 @media (max-width: 480px) {
   :root {
     --w-no: 22px;
-    --w-name: 50px;    /* 이름: 더 좁게(2~3자, 긴 이름은 칸 안 스크롤) */
+    --w-name: 44px;    /* 회원 이름: 한글 4자 기준 */
     --w-phone: 38px;   /* 양지번호: 최소폭 */
     --w-date: 38px;
     --w-rank: 26px;    /* 날짜/잃은 돈: 좁혀서 항상 3일 확보 */
@@ -665,7 +665,7 @@ html, body {
   .date-head .date-sub { font-size: 8.5px; }
   .date-head .date-lost { font-size: 8px; padding: 1px 3px; }
   .cell-money input { font-size: 11.5px; padding: 9px 1px; }
-  .cell-name input { font-size: 11.5px; }
+  .cell-name input { font-size: 10.5px; padding-left: 1px; padding-right: 1px; }
   .cell-phone input { font-size: 11px; }
   .col-total, .foot-grand { font-size: 11.5px; }
   .sheet tfoot td.foot-extra-cell .extra-input,
