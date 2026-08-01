@@ -72,7 +72,7 @@ app.post('/api/assets', async (c) => {
     if (f.size > 8 * 1024 * 1024) return c.json({ ok: false, error: 'too large (max 8MB)' }, 400);
 
     const ext = (f.name && f.name.indexOf('.') >= 0) ? f.name.slice(f.name.lastIndexOf('.')) : '';
-    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8) + ext;
+    const id = crypto.randomUUID() + ext;
     const buf = await f.arrayBuffer();
     await c.env.ASSETS_BUCKET.put('assets/' + id, buf, {
       httpMetadata: { contentType: f.type || 'application/octet-stream' },
