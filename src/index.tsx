@@ -1,28 +1,182 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 
-// R2 최소 타입 선언 (@cloudflare/workers-types 미설치 환경 대비)
-interface R2Object { key: string; uploaded?: any; customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string }; body: any }
-interface R2Bucket {
-  list(opts?: any): Promise<{ objects: R2Object[] }>;
-  get(key: string): Promise<R2Object | null>;
-  put(key: string, value: any, opts?: any): Promise<any>;
-  delete(key: string): Promise<void>;
+type Bindings = CloudflareBindings & {
+  ADMIN_PASSWORD: string;
+  SESSION_SECRET: string;
+}
+type AppEnv = { Bindings: Bindings }
+
+const app = new Hono<AppEnv>()
+const encoder = new TextEncoder()
+const decoder = new TextDecoder()
+const ADMIN_USERNAME = 'admin'
+const ADMIN_SESSION_MS = 8 * 60 * 60 * 1000
+const LOGIN_WINDOW_MS = 15 * 60 * 1000
+const MAX_LOGIN_FAILURES = 5
+const MAX_JSON_BYTES = 1024 * 1024
+const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif'])
+
+type AdminTokenPayload = { sub: 'admin'; iat: number; exp: number; nonce: string }
+type LoginAttempt = { count: number; windowStart: number }
+type SheetData = {
+  members: Array<{ id: string; name?: string; phone?: string }>;
+  dates: Array<{ id: string; iso?: string }>;
+  cells?: Record<string, unknown>;
+  labels?: unknown;
+  [key: string]: unknown;
 }
 
-type Bindings = {
-  ASSETS_BUCKET: R2Bucket;
-  ADMIN_KEY?: string;  // 관리자 쓰기 보호 키 (secret). 미설정 시 기본값 사용
+app.use('*', async (c, next) => {
+  await next()
+  c.header('X-Content-Type-Options', 'nosniff')
+  c.header('Referrer-Policy', 'no-referrer')
+  c.header('X-Frame-Options', 'DENY')
+  c.header('Content-Security-Policy', "default-src 'self'; style-src 'self' https://cdn.jsdelivr.net; font-src 'self' https://cdn.jsdelivr.net data:; img-src 'self' data: blob:; script-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+})
+
+function bytesToBase64Url(bytes: Uint8Array): string {
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
 }
 
-const app = new Hono<{ Bindings: Bindings }>()
-
-// 관리자 쓰기 키 검증. secret ADMIN_KEY 가 설정돼 있으면 그 값과,
-// 없으면 기본값 'admin1234' 와 비교(로컬/초기용).
-function checkAdmin(c: any): boolean {
-  const expected = (c.env && c.env.ADMIN_KEY) ? c.env.ADMIN_KEY : 'admin1234';
-  const got = c.req.header('x-admin-key') || '';
-  return got === expected;
+function base64UrlToBytes(value: string): Uint8Array {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = normalized + '='.repeat((4 - normalized.length % 4) % 4)
+  const binary = atob(padded)
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0))
 }
+
+function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.length !== right.length) return false
+  let difference = 0
+  for (let index = 0; index < left.length; index++) difference |= left[index] ^ right[index]
+  return difference === 0
+}
+
+async function digest(value: string): Promise<Uint8Array> {
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(value)))
+}
+
+async function constantTimeTextEqual(left: string, right: string): Promise<boolean> {
+  const [leftDigest, rightDigest] = await Promise.all([digest(left), digest(right)])
+  return equalBytes(leftDigest, rightDigest)
+}
+
+async function hmac(secret: string, value: string): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  return new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(value)))
+}
+
+async function issueAdminToken(secret: string): Promise<{ token: string; expiresAt: number }> {
+  const now = Date.now()
+  const payload: AdminTokenPayload = { sub: 'admin', iat: now, exp: now + ADMIN_SESSION_MS, nonce: crypto.randomUUID() }
+  const body = bytesToBase64Url(encoder.encode(JSON.stringify(payload)))
+  const signature = bytesToBase64Url(await hmac(secret, body))
+  return { token: `${body}.${signature}`, expiresAt: payload.exp }
+}
+
+async function verifyAdminRequest(c: Context<AppEnv>): Promise<boolean> {
+  const authorization = c.req.header('authorization') || ''
+  if (!authorization.startsWith('Bearer ') || !c.env.SESSION_SECRET) return false
+  const parts = authorization.slice(7).split('.')
+  if (parts.length !== 2) return false
+  try {
+    const supplied = base64UrlToBytes(parts[1])
+    const expected = await hmac(c.env.SESSION_SECRET, parts[0])
+    if (!equalBytes(supplied, expected)) return false
+    const payload = JSON.parse(decoder.decode(base64UrlToBytes(parts[0]))) as AdminTokenPayload
+    return payload.sub === 'admin' && Number.isFinite(payload.exp) && payload.exp > Date.now()
+  } catch {
+    return false
+  }
+}
+
+function noStore(c: Context<AppEnv>): void {
+  c.header('Cache-Control', 'no-store')
+}
+
+async function loginAttemptKey(c: Context<AppEnv>): Promise<string> {
+  const ip = c.req.header('cf-connecting-ip') || 'local'
+  const hash = await digest(ip)
+  return `auth/login/${bytesToBase64Url(hash.slice(0, 18))}.json`
+}
+
+async function readLoginAttempt(c: Context<AppEnv>, key: string): Promise<LoginAttempt> {
+  const object = await c.env.ASSETS_BUCKET.get(key)
+  if (!object) return { count: 0, windowStart: Date.now() }
+  try {
+    const parsed = JSON.parse(await object.text()) as LoginAttempt
+    if (!Number.isFinite(parsed.count) || !Number.isFinite(parsed.windowStart) || Date.now() - parsed.windowStart > LOGIN_WINDOW_MS) {
+      return { count: 0, windowStart: Date.now() }
+    }
+    return parsed
+  } catch {
+    return { count: 0, windowStart: Date.now() }
+  }
+}
+
+async function recordLoginFailure(c: Context<AppEnv>, key: string, previous: LoginAttempt): Promise<void> {
+  const next: LoginAttempt = { count: previous.count + 1, windowStart: previous.windowStart }
+  await c.env.ASSETS_BUCKET.put(key, JSON.stringify(next), { httpMetadata: { contentType: 'application/json' } })
+}
+
+function hasBoundedJsonBody(c: Context<AppEnv>, maximum = MAX_JSON_BYTES): boolean {
+  const contentLength = Number(c.req.header('content-length'))
+  return Number.isFinite(contentLength) && contentLength > 0 && contentLength <= maximum
+}
+
+function isSheetData(value: unknown): value is SheetData {
+  if (!value || typeof value !== 'object') return false
+  const data = value as Partial<SheetData>
+  if (!Array.isArray(data.members) || !Array.isArray(data.dates)) return false
+  if (data.members.length > 200 || data.dates.length > 500) return false
+  if (!data.members.every((member) => member && typeof member.id === 'string' && member.id.length <= 100)) return false
+  if (!data.dates.every((date) => date && typeof date.id === 'string' && date.id.length <= 100)) return false
+  if (data.cells && (typeof data.cells !== 'object' || Object.keys(data.cells).length > 100000)) return false
+  return true
+}
+
+function requiresAdminForSheetChange(current: SheetData | null, next: SheetData): boolean {
+  if (!current) return false
+  const nextMemberIds = new Set(next.members.map((member) => member.id))
+  const nextDateIds = new Set(next.dates.map((date) => date.id))
+  if (current.members.some((member) => !nextMemberIds.has(member.id))) return true
+  if (current.dates.some((date) => !nextDateIds.has(date.id))) return true
+  return JSON.stringify(current.labels ?? null) !== JSON.stringify(next.labels ?? null)
+}
+
+app.post('/api/admin/login', async (c) => {
+  noStore(c)
+  if (!c.env.ADMIN_PASSWORD || !c.env.SESSION_SECRET) {
+    return c.json({ ok: false, error: 'admin login is not configured' }, 503)
+  }
+  if (!hasBoundedJsonBody(c, 4096)) return c.json({ ok: false, error: 'bad request' }, 400)
+
+  const key = await loginAttemptKey(c)
+  const attempt = await readLoginAttempt(c, key)
+  if (attempt.count >= MAX_LOGIN_FAILURES) {
+    const retryAfter = Math.max(1, Math.ceil((LOGIN_WINDOW_MS - (Date.now() - attempt.windowStart)) / 1000))
+    c.header('Retry-After', String(retryAfter))
+    return c.json({ ok: false, error: 'too many attempts', retryAfter }, 429)
+  }
+
+  const body = await c.req.json<{ username?: unknown; password?: unknown }>().catch(() => null)
+  const username = typeof body?.username === 'string' ? body.username : ''
+  const password = typeof body?.password === 'string' ? body.password : ''
+  const [validUsername, validPassword] = await Promise.all([
+    constantTimeTextEqual(username, ADMIN_USERNAME),
+    constantTimeTextEqual(password, c.env.ADMIN_PASSWORD)
+  ])
+  if (!validUsername || !validPassword) {
+    await recordLoginFailure(c, key, attempt)
+    return c.json({ ok: false, error: 'invalid credentials' }, 401)
+  }
+
+  await c.env.ASSETS_BUCKET.delete(key)
+  const session = await issueAdminToken(c.env.SESSION_SECRET)
+  return c.json({ ok: true, token: session.token, expiresAt: session.expiresAt })
+})
 
 // ---------- 자료실 API (Cloudflare R2) ----------
 
@@ -54,15 +208,19 @@ app.get('/api/assets/:id', async (c) => {
   const obj = await c.env.ASSETS_BUCKET.get('assets/' + id);
   if (!obj) return c.notFound();
   const headers = new Headers();
-  const ct = (obj.httpMetadata && obj.httpMetadata.contentType) || 'application/octet-stream';
+  const storedType = (obj.httpMetadata && obj.httpMetadata.contentType) || '';
+  const ct = ALLOWED_IMAGE_TYPES.has(storedType) ? storedType : 'application/octet-stream';
   headers.set('Content-Type', ct);
+  headers.set('X-Content-Type-Options', 'nosniff');
+  if (ct === 'application/octet-stream') headers.set('Content-Disposition', 'attachment');
   headers.set('Cache-Control', 'public, max-age=31536000, immutable');
   return new Response(obj.body, { headers });
 });
 
 // 업로드 (관리자만): multipart/form-data { file, name }
 app.post('/api/assets', async (c) => {
-  if (!checkAdmin(c)) return c.json({ ok: false, error: 'unauthorized' }, 401);
+  if (!(await verifyAdminRequest(c))) return c.json({ ok: false, error: 'unauthorized' }, 401);
+  if (!hasBoundedJsonBody(c, 9 * 1024 * 1024)) return c.json({ ok: false, error: 'bad request' }, 400);
   try {
     const form = await c.req.formData();
     const file = form.get('file');
@@ -70,8 +228,10 @@ app.post('/api/assets', async (c) => {
     if (!file || typeof file === 'string') return c.json({ ok: false, error: 'no file' }, 400);
     const f = file as unknown as File;
     if (f.size > 8 * 1024 * 1024) return c.json({ ok: false, error: 'too large (max 8MB)' }, 400);
+    if (!ALLOWED_IMAGE_TYPES.has(f.type)) return c.json({ ok: false, error: 'unsupported image type' }, 415);
 
-    const ext = (f.name && f.name.indexOf('.') >= 0) ? f.name.slice(f.name.lastIndexOf('.')) : '';
+    const extensionMatch = f.name.toLowerCase().match(/\.(jpe?g|png|gif|webp|avif)$/);
+    const ext = extensionMatch ? extensionMatch[0] : '';
     const id = crypto.randomUUID() + ext;
     const buf = await f.arrayBuffer();
     await c.env.ASSETS_BUCKET.put('assets/' + id, buf, {
@@ -86,17 +246,18 @@ app.post('/api/assets', async (c) => {
 
 // 이름 수정 (관리자만): { name }
 app.patch('/api/assets/:id', async (c) => {
-  if (!checkAdmin(c)) return c.json({ ok: false, error: 'unauthorized' }, 401);
+  if (!(await verifyAdminRequest(c))) return c.json({ ok: false, error: 'unauthorized' }, 401);
+  if (!hasBoundedJsonBody(c, 4096)) return c.json({ ok: false, error: 'bad request' }, 400);
   try {
     const id = c.req.param('id');
     const key = 'assets/' + id;
     const obj = await c.env.ASSETS_BUCKET.get(key);
     if (!obj) return c.json({ ok: false, error: 'not found' }, 404);
-    const body = await c.req.json().catch(() => ({}));
-    const newName = ((body && body.name) || '').toString().trim();
+    const body: { name?: unknown } = await c.req.json<{ name?: unknown }>().catch(() => ({}));
+    const newName = typeof body.name === 'string' ? body.name.trim().slice(0, 120) : '';
     if (!newName) return c.json({ ok: false, error: 'no name' }, 400);
     const prevMeta = (obj.customMetadata || {}) as Record<string, string>;
-    const buf = await (obj.body as any).arrayBuffer ? await (obj.body as any).arrayBuffer() : obj.body;
+    const buf = await obj.arrayBuffer();
     await c.env.ASSETS_BUCKET.put(key, buf, {
       httpMetadata: obj.httpMetadata,
       customMetadata: { name: newName, ts: prevMeta.ts || String(Date.now()) }
@@ -109,7 +270,7 @@ app.patch('/api/assets/:id', async (c) => {
 
 // 삭제 (관리자만)
 app.delete('/api/assets/:id', async (c) => {
-  if (!checkAdmin(c)) return c.json({ ok: false, error: 'unauthorized' }, 401);
+  if (!(await verifyAdminRequest(c))) return c.json({ ok: false, error: 'unauthorized' }, 401);
   try {
     await c.env.ASSETS_BUCKET.delete('assets/' + c.req.param('id'));
     return c.json({ ok: true });
@@ -128,9 +289,9 @@ app.get('/api/sheet', async (c) => {
   try {
     const obj = await c.env.ASSETS_BUCKET.get(SHEET_KEY);
     if (!obj) return c.json({ ok: true, rev: 0, data: null });
-    const text = await (obj as any).text ? await (obj as any).text() : null;
-    let parsed: any = null;
-    if (text) { try { parsed = JSON.parse(text); } catch (e) { parsed = null; } }
+    const text = await obj.text();
+    let parsed: unknown = null;
+    if (text) { try { parsed = JSON.parse(text); } catch { parsed = null; } }
     const meta = (obj.customMetadata || {}) as Record<string, string>;
     const rev = meta.rev ? Number(meta.rev) : 0;
     return c.json({ ok: true, rev, data: parsed });
@@ -144,8 +305,9 @@ app.get('/api/sheet', async (c) => {
 // baseRev 가 서버 현재 rev 와 다르면 409(충돌) 반환 → 클라이언트가 먼저 최신을 받아 병합.
 app.put('/api/sheet', async (c) => {
   try {
-    const body = await c.req.json().catch(() => null) as any;
-    if (!body || typeof body !== 'object' || !body.data) {
+    if (!hasBoundedJsonBody(c)) return c.json({ ok: false, error: 'bad request' }, 400);
+    const body = await c.req.json<{ data?: unknown; baseRev?: unknown }>().catch(() => null);
+    if (!body || !isSheetData(body.data)) {
       return c.json({ ok: false, error: 'bad request' }, 400);
     }
     // 현재 서버 rev 확인
@@ -158,9 +320,19 @@ app.put('/api/sheet', async (c) => {
     // 낙관적 동시성: baseRev 가 제시됐고 서버 rev 와 다르면 충돌
     if (typeof body.baseRev === 'number' && body.baseRev !== curRev) {
       // 최신 서버 데이터를 함께 돌려줘서 클라이언트가 병합하게 함
-      let latest: any = null;
-      if (cur) { const t = await (cur as any).text ? await (cur as any).text() : null; if (t) { try { latest = JSON.parse(t); } catch (e) {} } }
+      let latest: unknown = null;
+      if (cur) { const t = await cur.text(); if (t) { try { latest = JSON.parse(t); } catch {} } }
       return c.json({ ok: false, conflict: true, rev: curRev, data: latest }, 409);
+    }
+    let currentData: SheetData | null = null;
+    if (cur) {
+      try {
+        const parsed = JSON.parse(await cur.text()) as unknown;
+        if (isSheetData(parsed)) currentData = parsed;
+      } catch {}
+    }
+    if (requiresAdminForSheetChange(currentData, body.data) && !(await verifyAdminRequest(c))) {
+      return c.json({ ok: false, error: 'admin authorization required' }, 403);
     }
     const newRev = curRev + 1;
     const payload = JSON.stringify(body.data);
