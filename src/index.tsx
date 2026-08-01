@@ -18,12 +18,21 @@ const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'im
 
 type AdminTokenPayload = { sub: 'admin'; iat: number; exp: number; nonce: string }
 type LoginAttempt = { count: number; windowStart: number }
+type AppStateRow = { rev: number; data_json: string | null }
 type SheetData = {
   members: Array<{ id: string; name?: string; phone?: string }>;
   dates: Array<{ id: string; iso?: string }>;
   cells?: Record<string, unknown>;
   labels?: unknown;
   [key: string]: unknown;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function logError(message: string, error: unknown, path?: string): void {
+  console.error(JSON.stringify({ message, error: errorMessage(error), path }))
 }
 
 app.use('*', async (c, next) => {
@@ -99,26 +108,43 @@ function noStore(c: Context<AppEnv>): void {
 async function loginAttemptKey(c: Context<AppEnv>): Promise<string> {
   const ip = c.req.header('cf-connecting-ip') || 'local'
   const hash = await digest(ip)
-  return `auth/login/${bytesToBase64Url(hash.slice(0, 18))}.json`
+  return bytesToBase64Url(hash.slice(0, 18))
 }
 
 async function readLoginAttempt(c: Context<AppEnv>, key: string): Promise<LoginAttempt> {
-  const object = await c.env.ASSETS_BUCKET.get(key)
-  if (!object) return { count: 0, windowStart: Date.now() }
-  try {
-    const parsed = JSON.parse(await object.text()) as LoginAttempt
-    if (!Number.isFinite(parsed.count) || !Number.isFinite(parsed.windowStart) || Date.now() - parsed.windowStart > LOGIN_WINDOW_MS) {
-      return { count: 0, windowStart: Date.now() }
-    }
-    return parsed
-  } catch {
+  const row = await c.env.DB.prepare(
+    'SELECT failure_count, window_start FROM login_attempts WHERE ip_hash = ?'
+  ).bind(key).first<{ failure_count: number; window_start: number }>()
+  if (!row) return { count: 0, windowStart: Date.now() }
+  if (Date.now() - row.window_start > LOGIN_WINDOW_MS) {
+    await c.env.DB.prepare('DELETE FROM login_attempts WHERE ip_hash = ?').bind(key).run()
     return { count: 0, windowStart: Date.now() }
   }
+  return { count: row.failure_count, windowStart: row.window_start }
 }
 
 async function recordLoginFailure(c: Context<AppEnv>, key: string, previous: LoginAttempt): Promise<void> {
   const next: LoginAttempt = { count: previous.count + 1, windowStart: previous.windowStart }
-  await c.env.ASSETS_BUCKET.put(key, JSON.stringify(next), { httpMetadata: { contentType: 'application/json' } })
+  await c.env.DB.prepare(
+    `INSERT INTO login_attempts (ip_hash, failure_count, window_start) VALUES (?, ?, ?)
+     ON CONFLICT(ip_hash) DO UPDATE SET failure_count = excluded.failure_count, window_start = excluded.window_start`
+  ).bind(key, next.count, next.windowStart).run()
+}
+
+async function recordAdminAudit(
+  c: Context<AppEnv>,
+  action: string,
+  targetType: string,
+  targetId: string | null,
+  details?: Record<string, unknown>
+): Promise<void> {
+  try {
+    await c.env.DB.prepare(
+      'INSERT INTO admin_audit (action, target_type, target_id, details_json) VALUES (?, ?, ?, ?)'
+    ).bind(action, targetType, targetId, details ? JSON.stringify(details) : null).run()
+  } catch (error) {
+    logError('admin audit write failed', error, c.req.path)
+  }
 }
 
 function hasBoundedJsonBody(c: Context<AppEnv>, maximum = MAX_JSON_BYTES): boolean {
@@ -133,8 +159,47 @@ function isSheetData(value: unknown): value is SheetData {
   if (data.members.length > 200 || data.dates.length > 500) return false
   if (!data.members.every((member) => member && typeof member.id === 'string' && member.id.length <= 100)) return false
   if (!data.dates.every((date) => date && typeof date.id === 'string' && date.id.length <= 100)) return false
-  if (data.cells && (typeof data.cells !== 'object' || Object.keys(data.cells).length > 100000)) return false
+  const memberIds = new Set(data.members.map((member) => member.id))
+  const dateIds = new Set(data.dates.map((date) => date.id))
+  if (memberIds.size !== data.members.length || dateIds.size !== data.dates.length) return false
+  if (!data.members.every((member) =>
+    (member.name === undefined || (typeof member.name === 'string' && member.name.length <= 24)) &&
+    (member.phone === undefined || (typeof member.phone === 'string' && member.phone.length <= 24))
+  )) return false
+  if (!data.dates.every((date) => date.iso === undefined || (typeof date.iso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date.iso)))) return false
+  if (data.cells) {
+    if (typeof data.cells !== 'object' || Array.isArray(data.cells) || Object.keys(data.cells).length > 100000) return false
+    for (const [key, score] of Object.entries(data.cells)) {
+      const separator = key.indexOf('|')
+      if (separator <= 0 || key.indexOf('|', separator + 1) !== -1) return false
+      if (!memberIds.has(key.slice(0, separator)) || !dateIds.has(key.slice(separator + 1))) return false
+      if (typeof score !== 'number' || !Number.isInteger(score) || score < 1 || score > 999) return false
+    }
+  }
   return true
+}
+
+function isMeaningfulValue(value: unknown): boolean {
+  if (value === null || value === undefined || value === '') return false
+  if (typeof value === 'number') return Number.isFinite(value) && value !== 0
+  if (typeof value === 'string') return value.trim().length > 0
+  return true
+}
+
+function removesMapValue(current: unknown, next: unknown): boolean {
+  if (!current || typeof current !== 'object' || Array.isArray(current)) return false
+  const before = current as Record<string, unknown>
+  const after = next && typeof next === 'object' && !Array.isArray(next) ? next as Record<string, unknown> : {}
+  return Object.keys(before).some((key) => isMeaningfulValue(before[key]) && !isMeaningfulValue(after[key]))
+}
+
+function removesNestedValue(current: unknown, next: unknown): boolean {
+  if (current && typeof current === 'object' && !Array.isArray(current)) {
+    const before = current as Record<string, unknown>
+    const after = next && typeof next === 'object' && !Array.isArray(next) ? next as Record<string, unknown> : {}
+    return Object.keys(before).some((key) => removesNestedValue(before[key], after[key]))
+  }
+  return isMeaningfulValue(current) && !isMeaningfulValue(next)
 }
 
 function requiresAdminForSheetChange(current: SheetData | null, next: SheetData): boolean {
@@ -143,7 +208,47 @@ function requiresAdminForSheetChange(current: SheetData | null, next: SheetData)
   const nextDateIds = new Set(next.dates.map((date) => date.id))
   if (current.members.some((member) => !nextMemberIds.has(member.id))) return true
   if (current.dates.some((date) => !nextDateIds.has(date.id))) return true
+  for (const member of current.members) {
+    const nextMember = next.members.find((candidate) => candidate.id === member.id)
+    if (!nextMember) return true
+    if (isMeaningfulValue(member.name) && !isMeaningfulValue(nextMember.name)) return true
+    if (isMeaningfulValue(member.phone) && !isMeaningfulValue(nextMember.phone)) return true
+  }
+  if (removesMapValue(current.cells, next.cells)) return true
+  if (removesNestedValue(current.extra, next.extra)) return true
+  if (removesNestedValue(current.manager, next.manager)) return true
   return JSON.stringify(current.labels ?? null) !== JSON.stringify(next.labels ?? null)
+}
+
+async function readD1Sheet(c: Context<AppEnv>): Promise<{ rev: number; data: SheetData | null }> {
+  const row = await c.env.DB.prepare('SELECT rev, data_json FROM app_state WHERE id = 1').first<AppStateRow>()
+  if (row?.data_json) {
+    try {
+      const parsed = JSON.parse(row.data_json) as unknown
+      if (isSheetData(parsed)) return { rev: Number(row.rev) || 0, data: parsed }
+    } catch (error) {
+      logError('D1 app state parse failed', error, c.req.path)
+    }
+  }
+
+  // 기존 운영본의 R2 JSON을 한 번만 D1으로 자동 이전한다.
+  const legacy = await c.env.ASSETS_BUCKET.get('sheet/data.json')
+  if (!legacy) return { rev: Number(row?.rev) || 0, data: null }
+  try {
+    const parsed = JSON.parse(await legacy.text()) as unknown
+    if (!isSheetData(parsed)) return { rev: Number(row?.rev) || 0, data: null }
+    const metadata = legacy.customMetadata || {}
+    const legacyRev = Math.max(1, Number(metadata.rev) || 1)
+    await c.env.DB.prepare(
+      `INSERT INTO app_state (id, rev, data_json, updated_at) VALUES (1, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(id) DO UPDATE SET rev = excluded.rev, data_json = excluded.data_json, updated_at = CURRENT_TIMESTAMP`
+    ).bind(legacyRev, JSON.stringify(parsed)).run()
+    await recordAdminAudit(c, 'legacy_r2_to_d1', 'app_state', '1', { rev: legacyRev })
+    return { rev: legacyRev, data: parsed }
+  } catch (error) {
+    logError('legacy R2 sheet migration failed', error, c.req.path)
+    return { rev: Number(row?.rev) || 0, data: null }
+  }
 }
 
 app.post('/api/admin/login', async (c) => {
@@ -173,7 +278,7 @@ app.post('/api/admin/login', async (c) => {
     return c.json({ ok: false, error: 'invalid credentials' }, 401)
   }
 
-  await c.env.ASSETS_BUCKET.delete(key)
+  await c.env.DB.prepare('DELETE FROM login_attempts WHERE ip_hash = ?').bind(key).run()
   const session = await issueAdminToken(c.env.SESSION_SECRET)
   return c.json({ ok: true, token: session.token, expiresAt: session.expiresAt })
 })
@@ -183,8 +288,14 @@ app.post('/api/admin/login', async (c) => {
 // 목록: R2에 저장된 이미지들의 메타데이터(id, name, ts) 반환
 app.get('/api/assets', async (c) => {
   try {
-    const list = await c.env.ASSETS_BUCKET.list({ prefix: 'assets/', include: ['customMetadata'] });
-    const items = list.objects.map((o) => {
+    const objects: R2Object[] = []
+    let cursor: string | undefined
+    do {
+      const page = await c.env.ASSETS_BUCKET.list({ prefix: 'assets/', include: ['customMetadata'], cursor })
+      objects.push(...page.objects)
+      cursor = page.truncated ? page.cursor : undefined
+    } while (cursor)
+    const items = objects.map((o) => {
       const meta = (o.customMetadata || {}) as Record<string, string>;
       const id = o.key.replace(/^assets\//, '');
       return {
@@ -197,14 +308,20 @@ app.get('/api/assets', async (c) => {
     // 최신 업로드가 위로
     items.sort((a, b) => b.ts - a.ts);
     return c.json({ ok: true, assets: items });
-  } catch (e: any) {
-    return c.json({ ok: false, error: String(e && e.message || e) }, 500);
+  } catch (error) {
+    logError('asset list failed', error, c.req.path)
+    return c.json({ ok: false, error: errorMessage(error) }, 500);
   }
 });
+
+function isValidAssetId(id: string): boolean {
+  return /^[0-9a-f-]{36}\.(?:jpe?g|png|gif|webp|avif)$/i.test(id)
+}
 
 // 이미지 원본 조회 (누구나 볼 수 있음 = 공유)
 app.get('/api/assets/:id', async (c) => {
   const id = c.req.param('id');
+  if (!isValidAssetId(id)) return c.json({ ok: false, error: 'invalid asset id' }, 400)
   const obj = await c.env.ASSETS_BUCKET.get('assets/' + id);
   if (!obj) return c.notFound();
   const headers = new Headers();
@@ -225,8 +342,8 @@ app.post('/api/assets', async (c) => {
     const form = await c.req.formData();
     const file = form.get('file');
     const name = (form.get('name') as string) || '';
-    if (!file || typeof file === 'string') return c.json({ ok: false, error: 'no file' }, 400);
-    const f = file as unknown as File;
+    if (!(file instanceof File)) return c.json({ ok: false, error: 'no file' }, 400);
+    const f = file;
     if (f.size > 8 * 1024 * 1024) return c.json({ ok: false, error: 'too large (max 8MB)' }, 400);
     if (!ALLOWED_IMAGE_TYPES.has(f.type)) return c.json({ ok: false, error: 'unsupported image type' }, 415);
 
@@ -238,9 +355,11 @@ app.post('/api/assets', async (c) => {
       httpMetadata: { contentType: f.type || 'application/octet-stream' },
       customMetadata: { name: (name || f.name || '자료'), ts: String(Date.now()) }
     });
+    await recordAdminAudit(c, 'create', 'asset', id, { name: name || f.name || '자료', size: f.size, type: f.type })
     return c.json({ ok: true, asset: { id, name: (name || f.name || '자료'), ts: Date.now(), url: '/api/assets/' + encodeURIComponent(id) } });
-  } catch (e: any) {
-    return c.json({ ok: false, error: String(e && e.message || e) }, 500);
+  } catch (error) {
+    logError('asset upload failed', error, c.req.path)
+    return c.json({ ok: false, error: errorMessage(error) }, 500);
   }
 });
 
@@ -250,6 +369,7 @@ app.patch('/api/assets/:id', async (c) => {
   if (!hasBoundedJsonBody(c, 4096)) return c.json({ ok: false, error: 'bad request' }, 400);
   try {
     const id = c.req.param('id');
+    if (!isValidAssetId(id)) return c.json({ ok: false, error: 'invalid asset id' }, 400)
     const key = 'assets/' + id;
     const obj = await c.env.ASSETS_BUCKET.get(key);
     if (!obj) return c.json({ ok: false, error: 'not found' }, 404);
@@ -262,9 +382,11 @@ app.patch('/api/assets/:id', async (c) => {
       httpMetadata: obj.httpMetadata,
       customMetadata: { name: newName, ts: prevMeta.ts || String(Date.now()) }
     });
+    await recordAdminAudit(c, 'rename', 'asset', id, { name: newName })
     return c.json({ ok: true, asset: { id, name: newName } });
-  } catch (e: any) {
-    return c.json({ ok: false, error: String(e && e.message || e) }, 500);
+  } catch (error) {
+    logError('asset rename failed', error, c.req.path)
+    return c.json({ ok: false, error: errorMessage(error) }, 500);
   }
 });
 
@@ -272,31 +394,26 @@ app.patch('/api/assets/:id', async (c) => {
 app.delete('/api/assets/:id', async (c) => {
   if (!(await verifyAdminRequest(c))) return c.json({ ok: false, error: 'unauthorized' }, 401);
   try {
-    await c.env.ASSETS_BUCKET.delete('assets/' + c.req.param('id'));
+    const id = c.req.param('id')
+    if (!isValidAssetId(id)) return c.json({ ok: false, error: 'invalid asset id' }, 400)
+    await c.env.ASSETS_BUCKET.delete('assets/' + id);
+    await recordAdminAudit(c, 'delete', 'asset', id)
     return c.json({ ok: true });
-  } catch (e: any) {
-    return c.json({ ok: false, error: String(e && e.message || e) }, 500);
+  } catch (error) {
+    logError('asset delete failed', error, c.req.path)
+    return c.json({ ok: false, error: errorMessage(error) }, 500);
   }
 });
 
-// ---------- 정산표 데이터 공유 API (Cloudflare R2에 JSON 저장) ----------
-// 모든 기기(모바일/PC)가 같은 정산표 데이터를 실시간 공유하도록 서버에 저장한다.
-// localStorage는 기기별로 분리돼 있어 연동이 안 되므로, 여기 서버 저장본을 "정본"으로 쓴다.
-const SHEET_KEY = 'sheet/data.json';
-
-// 서버에 저장된 정산표 데이터 조회. 없으면 rev=0 + null 데이터 반환.
+// ---------- 정산표 데이터 공유 API (Cloudflare D1) ----------
+// 구조화된 앱 상태는 D1, 이미지 원본만 R2에 저장한다.
 app.get('/api/sheet', async (c) => {
   try {
-    const obj = await c.env.ASSETS_BUCKET.get(SHEET_KEY);
-    if (!obj) return c.json({ ok: true, rev: 0, data: null });
-    const text = await obj.text();
-    let parsed: unknown = null;
-    if (text) { try { parsed = JSON.parse(text); } catch { parsed = null; } }
-    const meta = (obj.customMetadata || {}) as Record<string, string>;
-    const rev = meta.rev ? Number(meta.rev) : 0;
-    return c.json({ ok: true, rev, data: parsed });
-  } catch (e: any) {
-    return c.json({ ok: false, error: String(e && e.message || e) }, 500);
+    const current = await readD1Sheet(c)
+    return c.json({ ok: true, rev: current.rev, data: current.data, storage: { data: 'D1', images: 'R2' } })
+  } catch (error) {
+    logError('sheet read failed', error, c.req.path)
+    return c.json({ ok: false, error: errorMessage(error) }, 500);
   }
 });
 
@@ -310,39 +427,31 @@ app.put('/api/sheet', async (c) => {
     if (!body || !isSheetData(body.data)) {
       return c.json({ ok: false, error: 'bad request' }, 400);
     }
-    // 현재 서버 rev 확인
-    let curRev = 0;
-    const cur = await c.env.ASSETS_BUCKET.get(SHEET_KEY);
-    if (cur) {
-      const m = (cur.customMetadata || {}) as Record<string, string>;
-      curRev = m.rev ? Number(m.rev) : 0;
-    }
+    const current = await readD1Sheet(c)
+    const curRev = current.rev
     // 낙관적 동시성: baseRev 가 제시됐고 서버 rev 와 다르면 충돌
     if (typeof body.baseRev === 'number' && body.baseRev !== curRev) {
-      // 최신 서버 데이터를 함께 돌려줘서 클라이언트가 병합하게 함
-      let latest: unknown = null;
-      if (cur) { const t = await cur.text(); if (t) { try { latest = JSON.parse(t); } catch {} } }
-      return c.json({ ok: false, conflict: true, rev: curRev, data: latest }, 409);
+      return c.json({ ok: false, conflict: true, rev: curRev, data: current.data }, 409);
     }
-    let currentData: SheetData | null = null;
-    if (cur) {
-      try {
-        const parsed = JSON.parse(await cur.text()) as unknown;
-        if (isSheetData(parsed)) currentData = parsed;
-      } catch {}
-    }
-    if (requiresAdminForSheetChange(currentData, body.data) && !(await verifyAdminRequest(c))) {
+    const needsAdmin = requiresAdminForSheetChange(current.data, body.data)
+    const isAuthorizedAdmin = needsAdmin ? await verifyAdminRequest(c) : false
+    if (needsAdmin && !isAuthorizedAdmin) {
       return c.json({ ok: false, error: 'admin authorization required' }, 403);
     }
     const newRev = curRev + 1;
     const payload = JSON.stringify(body.data);
-    await c.env.ASSETS_BUCKET.put(SHEET_KEY, payload, {
-      httpMetadata: { contentType: 'application/json' },
-      customMetadata: { rev: String(newRev), ts: String(Date.now()) }
-    });
+    const result = await c.env.DB.prepare(
+      'UPDATE app_state SET rev = ?, data_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1 AND rev = ?'
+    ).bind(newRev, payload, curRev).run()
+    if (result.meta.changes !== 1) {
+      const latest = await readD1Sheet(c)
+      return c.json({ ok: false, conflict: true, rev: latest.rev, data: latest.data }, 409)
+    }
+    if (isAuthorizedAdmin) await recordAdminAudit(c, 'admin_update', 'app_state', '1', { rev: newRev })
     return c.json({ ok: true, rev: newRev });
-  } catch (e: any) {
-    return c.json({ ok: false, error: String(e && e.message || e) }, 500);
+  } catch (error) {
+    logError('sheet write failed', error, c.req.path)
+    return c.json({ ok: false, error: errorMessage(error) }, 500);
   }
 });
 
@@ -356,7 +465,7 @@ app.get('/', (c) => {
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⛳</text></svg>">
   <title>사보회</title>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
-  <link href="/static/style.css?v=20260730w" rel="stylesheet">
+  <link href="/static/style.css?v=20260801d1" rel="stylesheet">
 </head>
 <body>
   <header class="app-header" id="app-header">
@@ -375,7 +484,7 @@ app.get('/', (c) => {
 
   <main class="app-main" id="view-sheet">
     <div id="mode-banner" class="mode-banner mode-user">
-      <i class="fas fa-pen"></i><span class="mode-banner-text">일반 사용자 모드 · 모든 칸을 <b>자유롭게 입력·수정</b>할 수 있습니다 (회원·날짜 삭제, 자료실은 관리자)</span>
+      <i class="fas fa-pen"></i><span class="mode-banner-text">일반 사용자 모드 · 값을 <b>입력·수정</b>할 수 있습니다. 기존 값·회원·날짜·이미지 삭제는 관리자만 가능합니다.</span>
     </div>
     <div class="table-wrap" id="table-wrap">
       <table id="sheet" class="sheet">
@@ -396,9 +505,16 @@ app.get('/', (c) => {
           <button id="btn-logout" class="btn btn-red"><i class="fas fa-right-from-bracket"></i> 로그아웃</button>
         </div>
       </div>
-      <p class="admin-note"><i class="fas fa-circle-info"></i> 관리자 모드에서는 정산표의 모든 값을 <b>수정·삭제</b>할 수 있습니다. 로그아웃하면 일반 사용자는 <b>새 입력만</b> 가능합니다.</p>
+      <p class="admin-note"><i class="fas fa-circle-info"></i> 관리자 모드에서는 회원·타수·날짜·문구·이미지를 모두 관리하고 <b>삭제</b>할 수 있습니다. 일반 사용자는 기존 데이터를 삭제할 수 없습니다.</p>
 
       <div class="admin-cards">
+        <div class="admin-card storage-card">
+          <h3><i class="fas fa-cloud"></i> Cloudflare 분리 저장 구조</h3>
+          <div class="storage-architecture">
+            <div><b>D1 데이터베이스</b><span>회원 · 날짜 · 타수 · 평균타수 · 화면 문구 · 관리자 작업 이력</span></div>
+            <div><b>R2 이미지 저장소</b><span>업로드한 이미지 원본만 전용 보관</span></div>
+          </div>
+        </div>
         <div class="admin-card">
           <h3><i class="fas fa-chart-simple"></i> 데이터 요약</h3>
           <div id="admin-summary" class="admin-summary"></div>
@@ -436,7 +552,7 @@ app.get('/', (c) => {
 
         <div class="admin-card">
           <h3><i class="fas fa-images"></i> 자료실 (이미지 · 이름)</h3>
-          <p class="admin-desc"><i class="fas fa-cloud"></i> 이미지는 <b>서버(Cloudflare R2)</b>에 저장되어 <b>모든 사람이 함께 보고</b>, 자동으로 <b>영구 보관·백업</b>됩니다. 브라우저를 지워도 사라지지 않습니다. (이미지당 최대 8MB)</p>
+          <p class="admin-desc"><i class="fas fa-cloud"></i> 이미지는 <b>Cloudflare R2 이미지 전용 저장소</b>에 보관됩니다. 등록·이름 변경·삭제는 관리자만 가능하며, 보기는 모든 사용자가 가능합니다. (이미지당 최대 8MB)</p>
           <div class="asset-add">
             <input id="asset-name" type="text" placeholder="자료 이름 (예: 김회원 사진)" />
             <label class="btn btn-green file-btn"><i class="fas fa-image"></i> 이미지 선택
@@ -493,7 +609,7 @@ app.get('/', (c) => {
     </div>
   </div>
 
-  <script src="/static/app.js?v=20260730w"></script>
+  <script src="/static/app.js?v=20260801d1"></script>
 </body>
 </html>`)
 })

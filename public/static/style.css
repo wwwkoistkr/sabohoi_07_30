@@ -14,12 +14,12 @@
   --red: #d32f2f;
   --total-bg: #fff8e1;
   /* ── 컬럼 고정 폭(px). ch 단위는 폰트/브라우저마다 달라 정렬이 깨져 px로 고정 ── */
-  --w-no: 54px;      /* No: 숫자 3자리 */
-  --w-name: 132px;   /* 회원 이름: 한글 6자 */
-  --w-phone: 96px;   /* 양지번호: 숫자 6자리 */
-  --w-date: 64px;
-  --w-rank: 44px;    /* 날짜/금액: 십만원(100,000) */
-  --w-total: 110px;  /* 합계 */
+  --w-no: 42px;
+  --w-name: 80px;    /* 회원 이름: 한글 4자 */
+  --w-phone: 72px;   /* 양지번호: 숫자 6자리 */
+  --w-date: 44px;    /* 타수: 숫자 3자리 */
+  --w-rank: 30px;    /* 순위: 숫자 2자리 */
+  --w-total: 72px;   /* 평균타수 */
 }
 
 html {
@@ -205,7 +205,7 @@ html, body {
 .date-head { display: flex; flex-direction: column; align-items: center; gap: 0; position: relative; }
 .date-head .date-text { font-size: 14px; font-weight: 800; }
 .date-head .date-sub { font-size: 10px; opacity: .8; }
-/* 날짜 칸 금액의 의미(예: '잃은 돈')를 헤더에 작게 표기 */
+/* 날짜 칸 입력값의 의미(타수)를 헤더에 작게 표기 */
 .date-head .date-lost {
   margin-top: 2px; font-size: 10px; font-weight: 700;
   color: #3a2a00; background: var(--gold);
@@ -276,7 +276,7 @@ html, body {
 
 /* --- Input cells --- 헤더가 가운데 정렬이므로 입력칸도 전부 가운데 정렬 --- */
 .cell-name, .cell-phone, .cell-money { padding: 0; background: #fff; }
-.cell-rank { background: #fff9dc; color: var(--green-dark); font-weight: 900; text-align: center; padding: 10px 4px; border-right: 2px solid #f3cf57; }
+.cell-rank { background: #fff9dc; color: var(--green-dark); font-weight: 900; text-align: center; padding: 10px 1px; border-right: 2px solid #f3cf57; }
 .cell-name input, .cell-phone input, .cell-money input {
   width: 100%; border: none; background: transparent;
   padding: 10px 6px; font-size: 14px; color: var(--text);
@@ -329,10 +329,15 @@ html, body {
   background: var(--total-bg);
   color: var(--red);
   font-weight: 800;
-  text-align: right;
-  padding: 10px 10px;
+  text-align: center;
+  padding: 10px 2px;
   border-left: 1px solid var(--grid-strong);
   font-size: 14px;
+}
+.foot-average {
+  width: var(--w-total); min-width: var(--w-total);
+  background: var(--green-soft) !important;
+  border-left: 1px solid var(--grid-strong);
 }
 
 /* --- Footer --- */
@@ -456,6 +461,10 @@ html, body {
 .summary-item .lbl { font-size: 12px; color: var(--muted); margin-top: 2px; }
 .admin-btns { display: flex; gap: 8px; flex-wrap: wrap; }
 .file-btn { position: relative; overflow: hidden; }
+.storage-architecture { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.storage-architecture > div { border: 1px solid var(--grid); border-radius: 10px; padding: 12px; background: #f8fbfa; }
+.storage-architecture b { display: block; color: var(--green-dark); margin-bottom: 5px; }
+.storage-architecture span { display: block; color: var(--muted); font-size: 12px; line-height: 1.45; }
 
 .asset-add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
 .asset-add input[type=text] {
@@ -497,7 +506,7 @@ html, body {
 }
 .label-edit .lbl-row input:focus { outline: 2px solid var(--green); border-color: var(--green); }
 
-/* ===== 날짜 관리(금액 비우기 · 날짜 삭제) ===== */
+/* ===== 날짜 관리(타수 비우기 · 날짜 삭제) ===== */
 .date-manage-list { display: flex; flex-direction: column; gap: 8px; }
 .date-manage-empty { color: var(--muted); font-size: 13px; padding: 8px 2px; }
 .date-manage-row {
@@ -585,12 +594,12 @@ html, body {
    밀어내는 문제가 있었음. 이 블록은 오직 컬럼 폭만 담당한다. */
 @media (max-width: 900px) {
   :root {
-    --w-no: 30px;
-    --w-name: 56px;    /* 회원 이름: 한글 4자 기준 */
-    --w-phone: 50px;   /* 양지번호: 좁게 고정 → 다른 컬럼이 밀리지 않음 */
-    --w-date: 48px;
-    --w-rank: 34px;    /* 날짜/잃은 돈 */
-    --w-total: 78px;   /* 합계 */
+    --w-no: 26px;
+    --w-name: 52px;    /* 회원 이름: 한글 4자 */
+    --w-phone: 42px;
+    --w-date: 36px;    /* 타수: 숫자 3자리 */
+    --w-rank: 24px;    /* 순위: 숫자 2자리 */
+    --w-total: 60px;   /* 평균타수 */
   }
   /* 좁은 칸에 맞춰 헤더 글자를 작게 + 2줄 허용(칸 폭이 헤더 글자에 눌려 안 줄어드는 것 방지) */
   .sheet thead th { padding: 9px 2px; font-size: 12px; letter-spacing: 0; }
@@ -642,6 +651,7 @@ html, body {
   .cell-name input, .cell-phone input, .cell-money input { padding: 9px 3px; font-size: 13px; }
   .admin-cards { grid-template-columns: 1fr; }
   .asset-list { grid-template-columns: repeat(auto-fill, minmax(46%, 1fr)); }
+  .storage-architecture { grid-template-columns: 1fr; }
   /* 날짜 관리: 좁은 화면에서 정보 위 / 버튼 아래로 배치, 버튼은 폭 채움 */
   .date-manage-row { flex-direction: column; align-items: stretch; }
   .date-manage-row .dm-btns { width: 100%; }
@@ -653,12 +663,12 @@ html, body {
    날짜가 1일만 나오지 않고 여러 날 + 접힘(···+N일)이 함께 보이도록 한다. */
 @media (max-width: 480px) {
   :root {
-    --w-no: 22px;
+    --w-no: 20px;
     --w-name: 44px;    /* 회원 이름: 한글 4자 기준 */
-    --w-phone: 38px;   /* 양지번호: 최소폭 */
-    --w-date: 38px;
-    --w-rank: 26px;    /* 날짜/잃은 돈: 좁혀서 항상 3일 확보 */
-    --w-total: 56px;   /* 합계 */
+    --w-phone: 34px;   /* 양지번호: 최소폭 */
+    --w-date: 30px;    /* 타수: 숫자 3자리 */
+    --w-rank: 22px;    /* 순위: 숫자 2자리 */
+    --w-total: 48px;   /* 평균타수 */
   }
   .sheet thead th { padding: 8px 1px; font-size: 10.5px; }
   .date-head .date-text { font-size: 11.5px; }
@@ -667,7 +677,7 @@ html, body {
   .cell-money input { font-size: 11.5px; padding: 9px 1px; }
   .cell-name input { font-size: 10.5px; padding-left: 1px; padding-right: 1px; }
   .cell-phone input { font-size: 11px; }
-  .col-total, .foot-grand { font-size: 11.5px; }
+  .col-total, .cell-total, .foot-grand { font-size: 10px; white-space: normal !important; line-height: 1.05; }
   .sheet tfoot td.foot-extra-cell .extra-input,
   .sheet tfoot td.foot-balance-cell { font-size: 11px; padding: 8px 3px; text-align: right; }
   .sheet tfoot td.foot-date-value,

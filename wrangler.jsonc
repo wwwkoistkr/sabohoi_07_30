@@ -7,10 +7,22 @@
   "assets": {
     "directory": "./dist"
   },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "sabohoi-07-30-data",
+      "database_id": "e2bdd477-a334-4a3f-999c-38f0b7f0f328",
+      "migrations_dir": "migrations"
+    }
+  ],
   "r2_buckets": [
     {
       "binding": "ASSETS_BUCKET",
       "bucket_name": "golf-penalty-assets"
     }
-  ]
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": { "head_sampling_rate": 1 }
+  }
 }
