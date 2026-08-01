@@ -12,8 +12,7 @@
   var assetsLoaded = false;
 
   // 날짜가 많아 화면을 넘어가면 가운데 오래된 날짜 열을 자동으로 접어(숨겨)
-  // 회원이름·양지번호·최근 날짜 몇 개·합계가 한 화면에 보이게 함.
-  // (합계 금액은 접힌 날짜까지 전부 포함해 그대로 계산)
+  // 회원이름·양지번호·최근 날짜 몇 개·평균타수가 한 화면에 보이게 함.
   var collapseEnabled = true;   // 접기 사용 여부
   var expandTimer = null;       // '초기화(펼쳐보기)' 후 자동 복귀 타이머
 
@@ -126,7 +125,7 @@ function baseTotalAmount() {
     return arr;
   }
   function saveLocal() { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {} }
-  // save(): 로컬에 즉시 저장 + 서버(R2)에 디바운스 저장하여 모든 기기가 공유하게 함.
+  // save(): 로컬에 즉시 저장 + 서버(D1)에 디바운스 저장하여 모든 기기가 공유하게 함.
   function save() { saveLocal(); scheduleServerSave(); }
   // 입력이 끝난 뒤(포커스 해제) 미뤄둔 서버 데이터를 반영한다.
   function flushPendingServerData() {
@@ -135,11 +134,11 @@ function baseTotalAmount() {
       applyServerData(d);
     }
   }
-  function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+  function uid() { return (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
   // ============================================================
   //  서버 동기화 (모바일 ↔ PC 실시간 연동)
-  //  - 정산표 데이터를 서버(R2 sheet/data.json)에 저장/불러오기.
+  //  - 정산표 데이터를 서버(D1)에 저장/불러오기. R2는 이미지 전용이다.
   //  - localStorage 는 기기별로 분리돼 연동이 안 되므로 서버 저장본을 "정본"으로 사용.
   // ============================================================
   var serverRev = 0;            // 마지막으로 확인/저장한 서버 버전
@@ -189,7 +188,10 @@ function baseTotalAmount() {
       if (res.status === 401 || res.status === 403) {
         isSavingToServer = false;
         if (isAdmin) handleAdminExpired();
-        else if (res.status === 403) alert('이 변경은 관리자 로그인이 필요합니다.');
+        else if (res.status === 403) {
+          alert('기존 값 삭제는 관리자 로그인이 필요합니다. 서버의 원래 값으로 되돌립니다.');
+          reloadFromServer();
+        }
         return;
       }
       if (res.body && res.body.ok) { serverRev = res.body.rev || serverRev; }
@@ -198,6 +200,19 @@ function baseTotalAmount() {
     }).catch(function () {
       isSavingToServer = false; // 오프라인 등 실패 시 로컬 저장만 유지
     });
+  }
+
+  function reloadFromServer() {
+    return fetch('/api/sheet').then(function (r) { return r.json(); }).then(function (j) {
+      if (j && j.ok) {
+        serverRev = j.rev || 0;
+        if (j.data && j.data.members) {
+          lastAppliedJson = JSON.stringify(j.data);
+          pendingServerData = null;
+          applyServerData(j.data);
+        }
+      }
+    }).catch(function () {});
   }
 
   // 사용자가 표 안의 입력칸에 타이핑 중인지(포커스) 확인 — 그러면 화면을 다시 그리지 않는다.
@@ -276,6 +291,18 @@ function baseTotalAmount() {
 
   // ---------- 합계 ----------
   function memberTotal(id) { var s = 0; state.dates.forEach(function (d) { s += Number(state.cells[cellKey(id, d.id)]) || 0; }); return s; }
+  function memberAverageScore(id) {
+    var total = 0, participatedDays = 0;
+    state.dates.forEach(function (d) {
+      var score = Number(state.cells[cellKey(id, d.id)]) || 0;
+      if (score > 0) { total += score; participatedDays++; }
+    });
+    return participatedDays ? total / participatedDays : 0;
+  }
+  function fmtAverage(value) {
+    if (!value) return '';
+    return Number.isInteger(value) ? String(value) : value.toFixed(1);
+  }
   function dateTotal(id) { var s = 0; state.members.forEach(function (m) { s += Number(state.cells[cellKey(m.id, id)]) || 0; }); return s; }
   function grandTotal() { var s = 0; state.members.forEach(function (m) { s += memberTotal(m.id); }); return s; }
   function rankFor(memberId, dateId) {
@@ -424,6 +451,7 @@ function baseTotalAmount() {
     _vd.visible.forEach(function (d) {
       h += '<th class="col-date-group" colspan="2"><div class="date-head"><span class="date-text">' + fmtDate(d.iso) + '</span><span class="date-sub">' + fmtDateFull(d.iso) + '</span>' + (isAdmin ? '<button class="date-del" data-del-date="' + d.id + '" title="이 날짜 삭제"><i class="fas fa-xmark"></i></button>' : '') + '</div></th>';
     });
+    h += '<th class="col-total" rowspan="2">평균타수</th>';
     h += '</tr><tr class="date-sub-row">';
     _vd.visible.forEach(function (d) {
       h += '<th class="col-date col-score" data-col="date:' + d.id + '"' + wStyle('date:' + d.id) + '>' + escapeHtml(lostLabel()) + '<span class="col-resize" data-rz="date:' + d.id + '"></span></th>';
@@ -443,7 +471,7 @@ function baseTotalAmount() {
     membersByActiveRank().forEach(function (m, idx) {
       h += '<tr>';
       h += '<td class="cell-no">' + (idx + 1) + (isAdmin ? '<button class="row-del" data-del-member="' + m.id + '" title="이 회원 행 삭제"><i class="fas fa-xmark"></i></button>' : '') + '</td>';
-      h += '<td class="cell-name" data-col="name"' + wStyle('name') + '><input type="text" maxlength="6" class="' + inputCls('name-input', !!m.name) + '" data-name="' + m.id + '" value="' + escapeHtml(m.name) + '" placeholder="이름6자" /></td>';
+      h += '<td class="cell-name" data-col="name"' + wStyle('name') + '><input type="text" maxlength="4" class="' + inputCls('name-input', !!m.name) + '" data-name="' + m.id + '" value="' + escapeHtml(m.name) + '" placeholder="이름4자" /></td>';
       h += '<td class="cell-phone" data-col="phone"' + wStyle('phone') + '><input type="tel" inputmode="tel" maxlength="6" class="' + inputCls('phone-input', !!m.phone) + '" data-phone="' + m.id + '" value="' + escapeHtml(m.phone) + '" placeholder="번호6자" /></td>';
       if (_vd.hiddenCount > 0) h += '<td class="cell-fold" title="숨겨진 날짜"></td>';
       _vd.visible.forEach(function (d) {
@@ -451,6 +479,7 @@ function baseTotalAmount() {
         h += '<td class="cell-money" data-col="date:' + d.id + '"' + wStyle('date:' + d.id) + '><input type="text" inputmode="numeric" maxlength="3" data-m="' + m.id + '" data-d="' + d.id + '" class="' + inputCls('money-input', !!val) + (val ? ' has-val' : '') + '" value="' + (val ? fmt(val) : '') + '" placeholder="0" /></td>';
         h += '<td class="cell-rank" data-rank-member="' + m.id + '" data-rank-date="' + d.id + '">' + (rankFor(m.id, d.id) || '') + '</td>';
       });
+      h += '<td class="cell-total" data-average-member="' + m.id + '">' + fmtAverage(memberAverageScore(m.id)) + '</td>';
       h += '</tr>';
     });
     body.innerHTML = h;
@@ -462,12 +491,13 @@ function baseTotalAmount() {
     _vd.visible.forEach(function (d) {
       h += '<td colspan="2" class="foot-winner" data-winner-date="' + d.id + '">' + escapeHtml(dateWinnerNames(d.id)) + '</td>';
     });
+    h += '<td class="foot-average"></td>';
     h += '</tr>';
 
     var valueSpan = (_vd.hiddenCount > 0 ? 1 : 0) + (_vd.visible.length * 2);
     if (valueSpan < 1) valueSpan = 1;
     var total = currentTotalAmount();
-    h += '<tr class="foot-extra-row foot-total-row"><td class="foot-extra-label" colspan="3"><i class="fas fa-coins"></i>총액</td><td colspan="' + valueSpan + '" class="foot-extra-cell foot-total-cell"><input type="text" inputmode="numeric" pattern="[0-9]*" class="extra-input total-input has-val" data-total-amount="1" value="' + fmt(total) + '" placeholder="0" /></td></tr>';
+    h += '<tr class="foot-extra-row foot-total-row"><td class="foot-extra-label" colspan="3"><i class="fas fa-coins"></i>총액</td><td colspan="' + valueSpan + '" class="foot-extra-cell foot-total-cell"><input type="text" inputmode="numeric" pattern="[0-9]*" class="extra-input total-input has-val" data-total-amount="1" value="' + fmt(total) + '" placeholder="0" /></td><td class="foot-average"></td></tr>';
 
     h += '<tr class="foot-extra-row foot-expense-row"><td class="foot-extra-label" colspan="3"><i class="fas fa-money-bill-wave"></i>날짜별 지출</td>';
     if (_vd.hiddenCount > 0) h += '<td class="foot-extra-filler"></td>';
@@ -475,7 +505,7 @@ function baseTotalAmount() {
       var ex = expenseFor(d.id);
       h += '<td colspan="2" class="foot-extra-cell foot-date-value"><input type="text" inputmode="numeric" pattern="[0-9]*" class="extra-input' + (ex ? ' has-val' : '') + '" data-expense-date="' + d.id + '" value="' + (ex ? fmt(ex) : '') + '" placeholder="0" /></td>';
     });
-    h += '</tr>';
+    h += '<td class="foot-average"></td></tr>';
 
     h += '<tr class="foot-extra-row foot-balance-row"><td class="foot-extra-label" colspan="3"><i class="fas fa-wallet"></i>날짜별 잔액</td>';
     if (_vd.hiddenCount > 0) h += '<td class="foot-extra-filler"></td>';
@@ -483,7 +513,7 @@ function baseTotalAmount() {
       var balance = balanceFor(d.id);
       h += '<td colspan="2" class="foot-extra-cell foot-balance-cell foot-date-value' + (balance < 0 ? ' neg' : '') + '" data-balance-date="' + d.id + '">' + fmt(balance) + '</td>';
     });
-    h += '</tr>';
+    h += '<td class="foot-average"></td></tr>';
     foot.innerHTML = h;
   }
 
@@ -509,6 +539,8 @@ function baseTotalAmount() {
         var el = body.querySelector('[data-rank-member="' + m.id + '"][data-rank-date="' + d.id + '"]');
         if (el) el.textContent = rankFor(m.id, d.id) || '';
       });
+      var average = body.querySelector('[data-average-member="' + m.id + '"]');
+      if (average) average.textContent = fmtAverage(memberAverageScore(m.id));
     });
     state.dates.forEach(function (d) {
       var winner = foot.querySelector('[data-winner-date="' + d.id + '"]');
@@ -526,6 +558,11 @@ function baseTotalAmount() {
     var t = e.target;
     if (t.matches('.money-input')) {
       var num = parseNum(t.value);
+      if (!isAdmin && !num && parseNum(t.dataset.originalValue)) {
+        t.value = t.dataset.originalValue;
+        alert('기존 타수 삭제는 관리자만 할 수 있습니다.');
+        return;
+      }
       var k = cellKey(t.getAttribute('data-m'), t.getAttribute('data-d'));
       // 금액 상한: 십만원(100,000). 초과 입력 시 상한값으로 고정
       if (num > MAX_SCORE) { num = MAX_SCORE; t.value = String(MAX_SCORE); }
@@ -534,9 +571,19 @@ function baseTotalAmount() {
       t.classList.toggle('has-val', !!num); refreshTotals(); save();
       if (qpTarget === t && quickCur) quickCur.textContent = fmt(num); // 팝오버 현재값 동기화
     } else if (t.matches('.name-input')) {
+      if (!isAdmin && !t.value.trim() && (t.dataset.originalValue || '').trim()) {
+        t.value = t.dataset.originalValue;
+        alert('기존 회원 이름 삭제는 관리자만 할 수 있습니다.');
+        return;
+      }
       var m1 = findMember(t.getAttribute('data-name'));
       if (m1) { m1.name = t.value; save(); }
     } else if (t.matches('.phone-input')) {
+      if (!isAdmin && !t.value.trim() && (t.dataset.originalValue || '').trim()) {
+        t.value = t.dataset.originalValue;
+        alert('기존 번호 삭제는 관리자만 할 수 있습니다.');
+        return;
+      }
       var m2 = findMember(t.getAttribute('data-phone'));
       if (m2) { m2.phone = t.value; save(); }
     }
@@ -561,11 +608,17 @@ function baseTotalAmount() {
   //   3) 실시간 천단위 콤마 + 커서 보정
   foot.addEventListener('focus', function (e) {
     var t = e.target; if (!t.matches('.extra-input')) return;
+    t.dataset.originalValue = t.value;
     setTimeout(function () { try { t.select(); } catch (x) {} }, 0);
   }, true);
   foot.addEventListener('input', function (e) {
     var t = e.target; if (!t.matches('.extra-input')) return;
     var num = parseNum(t.value); // 콤마·비숫자 무시, 숫자만
+    if (!isAdmin && !num && parseNum(t.dataset.originalValue)) {
+      t.value = t.dataset.originalValue;
+      alert('기존 금액 삭제는 관리자만 할 수 있습니다.');
+      return;
+    }
     if (num < 0) num = 0;
     if (!state.extra) state.extra = { expenses: {} };
     if (t.hasAttribute('data-total-amount')) {
@@ -601,7 +654,9 @@ function baseTotalAmount() {
   }, true);
 
   body.addEventListener('focus', function (e) {
-    var t = e.target; if (!t.matches('.money-input')) return;
+    var t = e.target;
+    if (t.matches('.name-input, .phone-input, .money-input')) t.dataset.originalValue = t.value;
+    if (!t.matches('.money-input')) return;
     var num = parseNum(t.value); t.value = num ? String(num) : '';
     setTimeout(function () { try { t.select(); } catch (x) {} }, 0);
     openQuickPad(t); // 천원 단위 빠른입력 팝오버 표시
@@ -772,7 +827,7 @@ function baseTotalAmount() {
     if (!isAdmin || !adminToken) { alert('날짜 삭제는 관리자만 할 수 있습니다.'); return; }
     var id = del.getAttribute('data-del-date'); var d = null;
     for (var i = 0; i < state.dates.length; i++) if (state.dates[i].id === id) d = state.dates[i];
-    if (d && confirm('"' + fmtDateFull(d.iso) + '" 날짜 열을 삭제할까요? 해당 금액도 삭제됩니다.')) {
+    if (d && confirm('"' + fmtDateFull(d.iso) + '" 날짜 열을 삭제할까요? 해당 타수도 삭제됩니다.')) {
       state.dates = state.dates.filter(function (x) { return x.id !== id; });
       Object.keys(state.cells).forEach(function (k) { if (k.split('|')[1] === id) delete state.cells[k]; });
       delete state.widths['date:' + id];
@@ -879,7 +934,7 @@ function baseTotalAmount() {
   // 관리자 전용: 정산표 완전 초기화(데이터 삭제)는 관리자 화면에서 수행
   function fullReset() {
     if (!isAdmin || !adminToken) { alert('초기화는 관리자만 할 수 있습니다.'); return; }
-    if (confirm('정산표(회원/날짜/금액)를 완전히 초기화할까요?\n※ 관리자 자료실 이미지는 유지됩니다.')) {
+    if (confirm('정산표(회원/날짜/타수)를 완전히 초기화할까요?\n※ R2 자료실 이미지는 유지됩니다.')) {
       state.members = makeDefaultMembers();
       state.dates = makeDefaultDates();
       state.cells = {}; state.manager = { name: '', phone: '' }; state.widths = {};
@@ -896,19 +951,22 @@ function baseTotalAmount() {
     var rows = [];
     var header = ['No', '회원 이름', '양지번호'];
     state.dates.forEach(function (d) { header.push(fmtDateFull(d.iso) + ' 타수'); header.push(fmtDateFull(d.iso) + ' 순위'); });
+    header.push('평균타수');
     rows.push(header);
     state.members.forEach(function (m, i) {
       var row = [i + 1, m.name || '', m.phone || ''];
       state.dates.forEach(function (d) { row.push(state.cells[cellKey(m.id, d.id)] || 0); row.push(rankFor(m.id, d.id) || ''); });
+      row.push(fmtAverage(memberAverageScore(m.id)));
       rows.push(row);
     });
     var winnerRow = ['', '날짜별 1등', ''];
     state.dates.forEach(function (d) { winnerRow.push(dateBestScore(d.id) || ''); winnerRow.push(dateWinnerNames(d.id)); });
+    winnerRow.push('');
     rows.push(winnerRow);
     var span = state.dates.length * 2;
-    var totalRow = ['', '총액', '']; for (var i = 0; i < span - 1; i++) totalRow.push(''); totalRow.push(currentTotalAmount()); rows.push(totalRow);
-    var expRow = ['', '날짜별 지출', '']; state.dates.forEach(function (d) { expRow.push(expenseFor(d.id)); expRow.push(''); }); rows.push(expRow);
-    var balRow = ['', '날짜별 잔액', '']; state.dates.forEach(function (d) { balRow.push(balanceFor(d.id)); balRow.push(''); }); rows.push(balRow);
+    var totalRow = ['', '총액', '']; for (var i = 0; i < span - 1; i++) totalRow.push(''); totalRow.push(currentTotalAmount()); totalRow.push(''); rows.push(totalRow);
+    var expRow = ['', '날짜별 지출', '']; state.dates.forEach(function (d) { expRow.push(expenseFor(d.id)); expRow.push(''); }); expRow.push(''); rows.push(expRow);
+    var balRow = ['', '날짜별 잔액', '']; state.dates.forEach(function (d) { balRow.push(balanceFor(d.id)); balRow.push(''); }); balRow.push(''); rows.push(balRow);
     var csv = rows.map(function (r) { return r.map(function (c) { var v = String(c == null ? '' : c); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(','); }).join('\n');
     var blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
     downloadBlob(blob, '사보회_' + todayIso() + '.csv');
@@ -1002,7 +1060,7 @@ function baseTotalAmount() {
         banner.innerHTML = '<i class="fas fa-lock-open"></i><span class="mode-banner-text">관리자 모드 · 모든 값을 <b>수정·삭제</b>할 수 있습니다</span>';
       } else {
         banner.className = 'mode-banner mode-user';
-        banner.innerHTML = '<i class="fas fa-pen"></i><span class="mode-banner-text">일반 사용자 모드 · 모든 칸을 <b>자유롭게 입력·수정</b>할 수 있습니다 (회원·날짜 삭제, 자료실은 관리자)</span>';
+        banner.innerHTML = '<i class="fas fa-pen"></i><span class="mode-banner-text">일반 사용자 모드 · 값을 <b>입력·수정</b>할 수 있습니다. 기존 값·회원·날짜·이미지 삭제는 관리자만 가능합니다.</span>';
       }
     }
   }
@@ -1079,7 +1137,7 @@ function baseTotalAmount() {
     document.getElementById('admin-summary').innerHTML =
       '<div class="summary-item"><div class="num">' + namedMembers + '</div><div class="lbl">등록 회원</div></div>' +
       '<div class="summary-item"><div class="num">' + state.dates.length + '</div><div class="lbl">골프 날짜</div></div>' +
-      '<div class="summary-item"><div class="num">' + fmt(totalPenalty) + '</div><div class="lbl">누적 페널티(원)</div></div>' +
+      '<div class="summary-item"><div class="num">' + fmt(totalPenalty) + '</div><div class="lbl">누적 타수</div></div>' +
       '<div class="summary-item"><div class="num" id="asset-count-num">' + assetsCache.length + '</div><div class="lbl">자료 개수</div></div>';
     // 화면 문구 편집칸에 현재 값 채우기
     fillLabelInputs();
@@ -1115,10 +1173,10 @@ function baseTotalAmount() {
       h += '<div class="date-manage-row">' +
         '<div class="dm-info">' +
           '<span class="dm-date">' + escapeHtml(fmtDateFull(d.iso)) + '</span>' +
-          '<span class="dm-sub">' + (filled ? (filled + '명 · 합계 ' + fmt(tot) + '원') : '입력 없음') + '</span>' +
+          '<span class="dm-sub">' + (filled ? (filled + '명 · 합계 ' + fmt(tot) + '타') : '입력 없음') + '</span>' +
         '</div>' +
         '<div class="dm-btns">' +
-          '<button class="btn btn-gray dm-clear" data-clear-date="' + d.id + '"' + (filled ? '' : ' disabled') + '><i class="fas fa-eraser"></i> 금액 비우기</button>' +
+          '<button class="btn btn-gray dm-clear" data-clear-date="' + d.id + '"' + (filled ? '' : ' disabled') + '><i class="fas fa-eraser"></i> 타수 비우기</button>' +
           '<button class="btn btn-red dm-del" data-del-date-adm="' + d.id + '"><i class="fas fa-trash-can"></i> 날짜 삭제</button>' +
         '</div>' +
       '</div>';
@@ -1135,14 +1193,14 @@ function baseTotalAmount() {
       if (clearBtn) {
         var cid = clearBtn.getAttribute('data-clear-date');
         var cd = findDate(cid);
-        if (cd && confirm('"' + fmtDateFull(cd.iso) + '" 날짜의 입력 금액을 모두 0으로 비울까요?\n※ 날짜 열은 그대로 두고 금액만 지웁니다.')) {
+        if (cd && confirm('"' + fmtDateFull(cd.iso) + '" 날짜의 입력 타수를 모두 비울까요?\n※ 날짜 열은 그대로 두고 타수만 지웁니다.')) {
           state.members.forEach(function (m) { delete state.cells[cellKey(m.id, cid)]; });
           save(); render(); renderDateManage();
         }
       } else if (delBtn) {
         var did = delBtn.getAttribute('data-del-date-adm');
         var dd = findDate(did);
-        if (dd && confirm('"' + fmtDateFull(dd.iso) + '" 날짜 열을 완전히 삭제할까요?\n※ 해당 날짜의 모든 금액도 함께 삭제됩니다.')) {
+        if (dd && confirm('"' + fmtDateFull(dd.iso) + '" 날짜 열을 완전히 삭제할까요?\n※ 해당 날짜의 모든 타수도 함께 삭제됩니다.')) {
           state.dates = state.dates.filter(function (x) { return x.id !== did; });
           Object.keys(state.cells).forEach(function (k) { if (k.split('|')[1] === did) delete state.cells[k]; });
           delete state.widths['date:' + did];
@@ -1300,7 +1358,7 @@ function baseTotalAmount() {
   var adminResetBtn = document.getElementById('admin-reset');
   if (adminResetBtn) adminResetBtn.addEventListener('click', fullReset);
   document.getElementById('admin-backup').addEventListener('click', function () {
-    // 정산 데이터(회원/날짜/금액)만 백업. 자료실 이미지는 서버(R2)에 자동 보관됨.
+    // D1 정산 데이터(회원/날짜/타수)만 백업. 자료실 이미지는 R2에 별도 보관됨.
     var blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
     downloadBlob(blob, '골프정산_백업_' + todayIso() + '.json');
   });
@@ -1316,7 +1374,7 @@ function baseTotalAmount() {
           members: d.members || makeDefaultMembers(),
           dates: (d.dates && d.dates.length) ? d.dates : makeDefaultDates(),
           cells: d.cells || {}, manager: d.manager || { name: '', phone: '' },
-          widths: d.widths || {}, labels: mergeLabels(d.labels)
+          widths: d.widths || {}, labels: mergeLabels(d.labels), extra: normalizeExtra(d.extra)
           // 자료실 이미지는 서버(R2)에 있으므로 복원 대상이 아님
         };
         save();
@@ -1334,7 +1392,7 @@ function baseTotalAmount() {
   window.addEventListener('load', syncHeaderWidth);
   if (document.fonts && document.fonts.ready) { document.fonts.ready.then(syncHeaderWidth); }
 
-  // 서버(R2)에서 공유 데이터 로드 → 화면 반영 → 이후 4초마다 폴링하여 다른 기기 변경 동기화.
+  // 서버(D1)에서 공유 데이터 로드 → 화면 반영 → 이후 4초마다 폴링하여 다른 기기 변경 동기화.
   // 이렇게 하면 모바일에서 추가한 날짜가 PC에도, PC에서 추가한 날짜가 모바일에도 실시간 반영됨.
   loadFromServer().then(function () { startPolling(); });
 })();
