@@ -5,12 +5,9 @@
   var STORE_KEY = 'golf-penalty-sheet-v3';
   var DEFAULT_ROWS = 8;
   var DEFAULT_DATE_COUNT = 3;   // 앱 기본 날짜 개수(3개). 많아지면 접기로 처리.
-  var ADMIN_ID = 'admin';
-  var ADMIN_PW = 'admin1234';
-
   var isAdmin = false; // 관리자 로그인 여부 (수정/삭제 권한)
   var MAX_SCORE = 999; // 타수 입력 상한
-  var adminKey = '';       // 서버 자료실 쓰기용 관리자 키 (로그인 시 저장)
+  var adminToken = '';     // 서버가 로그인 성공 후 발급한 8시간 만료 토큰(메모리에만 보관)
   var assetsCache = [];    // 서버(R2)에서 받아온 자료실 목록
   var assetsLoaded = false;
 
@@ -175,7 +172,7 @@ function baseTotalAmount() {
     lastAppliedJson = JSON.stringify(payload);
     fetch('/api/sheet', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ data: payload, baseRev: serverRev })
     }).then(function (r) {
       return r.json().then(function (j) { return { status: r.status, body: j }; });
@@ -187,6 +184,12 @@ function baseTotalAmount() {
         isSavingToServer = false;
         // 병합된 내 변경을 다시 저장(최신 rev 기준)
         scheduleServerSave();
+        return;
+      }
+      if (res.status === 401 || res.status === 403) {
+        isSavingToServer = false;
+        if (isAdmin) handleAdminExpired();
+        else if (res.status === 403) alert('이 변경은 관리자 로그인이 필요합니다.');
         return;
       }
       if (res.body && res.body.ok) { serverRev = res.body.rev || serverRev; }
@@ -439,7 +442,7 @@ function baseTotalAmount() {
     var h = '';
     membersByActiveRank().forEach(function (m, idx) {
       h += '<tr>';
-      h += '<td class="cell-no">' + (idx + 1) + '<button class="row-del" data-del-member="' + m.id + '" title="이 회원 행 삭제"><i class="fas fa-xmark"></i></button></td>';
+      h += '<td class="cell-no">' + (idx + 1) + (isAdmin ? '<button class="row-del" data-del-member="' + m.id + '" title="이 회원 행 삭제"><i class="fas fa-xmark"></i></button>' : '') + '</td>';
       h += '<td class="cell-name" data-col="name"' + wStyle('name') + '><input type="text" maxlength="6" class="' + inputCls('name-input', !!m.name) + '" data-name="' + m.id + '" value="' + escapeHtml(m.name) + '" placeholder="이름6자" /></td>';
       h += '<td class="cell-phone" data-col="phone"' + wStyle('phone') + '><input type="tel" inputmode="tel" maxlength="6" class="' + inputCls('phone-input', !!m.phone) + '" data-phone="' + m.id + '" value="' + escapeHtml(m.phone) + '" placeholder="번호6자" /></td>';
       if (_vd.hiddenCount > 0) h += '<td class="cell-fold" title="숨겨진 날짜"></td>';
@@ -747,6 +750,7 @@ function baseTotalAmount() {
   // ---------- 회원/날짜 삭제 ----------
   body.addEventListener('click', function (e) {
     var del = e.target.closest('[data-del-member]'); if (!del) return;
+    if (!isAdmin || !adminToken) { alert('회원 삭제는 관리자만 할 수 있습니다.'); return; }
     var id = del.getAttribute('data-del-member'); var m = findMember(id);
     var label = (m && m.name) ? ('"' + m.name + '"') : '이';
     if (confirm(label + ' 회원 행을 삭제할까요?')) {
@@ -765,6 +769,7 @@ function baseTotalAmount() {
 
   head.addEventListener('click', function (e) {
     var del = e.target.closest('[data-del-date]'); if (!del) return;
+    if (!isAdmin || !adminToken) { alert('날짜 삭제는 관리자만 할 수 있습니다.'); return; }
     var id = del.getAttribute('data-del-date'); var d = null;
     for (var i = 0; i < state.dates.length; i++) if (state.dates[i].id === id) d = state.dates[i];
     if (d && confirm('"' + fmtDateFull(d.iso) + '" 날짜 열을 삭제할까요? 해당 금액도 삭제됩니다.')) {
@@ -873,7 +878,7 @@ function baseTotalAmount() {
 
   // 관리자 전용: 정산표 완전 초기화(데이터 삭제)는 관리자 화면에서 수행
   function fullReset() {
-    if (!isAdmin) { alert('초기화는 관리자만 할 수 있습니다.'); return; }
+    if (!isAdmin || !adminToken) { alert('초기화는 관리자만 할 수 있습니다.'); return; }
     if (confirm('정산표(회원/날짜/금액)를 완전히 초기화할까요?\n※ 관리자 자료실 이미지는 유지됩니다.')) {
       state.members = makeDefaultMembers();
       state.dates = makeDefaultDates();
@@ -961,6 +966,29 @@ function baseTotalAmount() {
   var viewAdmin = document.getElementById('view-admin');
 
   var btnAdmin = document.getElementById('btn-admin');
+  var loginOk = document.getElementById('login-ok');
+  var authExpiryAlertShown = false;
+
+  function adminHeaders(extra) {
+    var headers = {};
+    Object.keys(extra || {}).forEach(function (key) { headers[key] = extra[key]; });
+    if (adminToken) headers.Authorization = 'Bearer ' + adminToken;
+    return headers;
+  }
+
+  function endAdminSession(showMessage) {
+    isAdmin = false;
+    adminToken = '';
+    updateAdminBtn();
+    if (viewAdmin && !viewAdmin.classList.contains('hidden')) closeAdmin();
+    if (showMessage) alert('관리자 인증이 만료되었습니다. 다시 로그인해 주세요.');
+  }
+
+  function handleAdminExpired() {
+    if (authExpiryAlertShown) return;
+    authExpiryAlertShown = true;
+    endAdminSession(true);
+  }
 
   function updateAdminBtn() {
     btnAdmin.innerHTML = isAdmin
@@ -988,24 +1016,54 @@ function baseTotalAmount() {
   document.getElementById('login-cancel').addEventListener('click', function () { loginModal.classList.add('hidden'); });
   loginModal.addEventListener('click', function (e) { if (e.target === loginModal) loginModal.classList.add('hidden'); });
   function tryLogin() {
-    if (loginId.value.trim() === ADMIN_ID && loginPw.value === ADMIN_PW) {
-      isAdmin = true;
-      adminKey = loginPw.value; // 서버 자료실 API 쓰기 인증에 사용(x-admin-key)
-      loginModal.classList.add('hidden');
-      updateAdminBtn(); render(); openAdmin();
-    } else { loginError.classList.remove('hidden'); }
+    var username = loginId.value.trim();
+    var password = loginPw.value;
+    if (!username || !password) { loginError.textContent = '아이디와 비밀번호를 입력해 주세요.'; loginError.classList.remove('hidden'); return; }
+    loginError.classList.add('hidden');
+    loginOk.disabled = true;
+    loginOk.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 확인 중…';
+    fetch('/api/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: username, password: password })
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (d) { return { status: r.status, d: d }; });
+    }).then(function (res) {
+      if (res.status === 200 && res.d && res.d.token) {
+        isAdmin = true;
+        adminToken = res.d.token;
+        authExpiryAlertShown = false;
+        loginPw.value = '';
+        loginModal.classList.add('hidden');
+        updateAdminBtn(); render(); openAdmin();
+        return;
+      }
+      loginError.textContent = res.status === 429
+        ? '로그인 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요.'
+        : '아이디 또는 비밀번호가 올바르지 않습니다.';
+      loginError.classList.remove('hidden');
+    }).catch(function () {
+      loginError.textContent = '서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.';
+      loginError.classList.remove('hidden');
+    }).then(function () {
+      loginOk.disabled = false;
+      loginOk.textContent = '로그인';
+    });
   }
-  document.getElementById('login-ok').addEventListener('click', tryLogin);
+  loginOk.addEventListener('click', tryLogin);
   loginPw.addEventListener('keydown', function (e) { if (e.key === 'Enter') tryLogin(); });
   loginId.addEventListener('keydown', function (e) { if (e.key === 'Enter') loginPw.focus(); });
 
-  function openAdmin() { viewSheet.classList.add('hidden'); viewAdmin.classList.remove('hidden'); renderAdmin(); }
+  function openAdmin() {
+    if (!isAdmin || !adminToken) { endAdminSession(false); return; }
+    viewSheet.classList.add('hidden'); viewAdmin.classList.remove('hidden'); renderAdmin();
+  }
   function closeAdmin() { viewAdmin.classList.add('hidden'); viewSheet.classList.remove('hidden'); render(); }
   document.getElementById('btn-admin-close').addEventListener('click', closeAdmin);
 
   // 관리자 로그아웃
   document.getElementById('btn-logout').addEventListener('click', function () {
-    isAdmin = false; adminKey = ''; updateAdminBtn(); closeAdmin();
+    endAdminSession(false);
     alert('관리자 모드를 종료했습니다. 이제 일반 사용자(입력만 가능) 상태입니다.');
   });
 
@@ -1071,7 +1129,7 @@ function baseTotalAmount() {
     var box = document.getElementById('admin-date-list');
     if (!box) return;
     box.addEventListener('click', function (e) {
-      if (!isAdmin) return;
+      if (!isAdmin || !adminToken) return;
       var clearBtn = e.target.closest('[data-clear-date]');
       var delBtn = e.target.closest('[data-del-date-adm]');
       if (clearBtn) {
@@ -1106,7 +1164,7 @@ function baseTotalAmount() {
     var saveBtn = document.getElementById('lbl-save');
     var resetBtn = document.getElementById('lbl-reset');
     if (saveBtn) saveBtn.addEventListener('click', function () {
-      if (!isAdmin) { alert('문구 수정은 관리자만 할 수 있습니다.'); return; }
+      if (!isAdmin || !adminToken) { alert('문구 수정은 관리자만 할 수 있습니다.'); return; }
       var get = function (id) { var e = document.getElementById(id); return e ? e.value.trim() : ''; };
       state.labels = mergeLabels({
         title: get('lbl-title'), lost: get('lbl-lost'),
@@ -1116,7 +1174,7 @@ function baseTotalAmount() {
       alert('화면 문구를 저장했습니다.');
     });
     if (resetBtn) resetBtn.addEventListener('click', function () {
-      if (!isAdmin) return;
+      if (!isAdmin || !adminToken) return;
       if (!confirm('화면 문구를 모두 기본값으로 되돌릴까요?')) return;
       state.labels = defaultLabels();
       save(); fillLabelInputs(); render();
@@ -1165,7 +1223,7 @@ function baseTotalAmount() {
     pendingFile = f;
   });
   document.getElementById('asset-save').addEventListener('click', function () {
-    if (!isAdmin) { alert('자료 등록은 관리자만 할 수 있습니다.'); return; }
+    if (!isAdmin || !adminToken) { alert('자료 등록은 관리자만 할 수 있습니다.'); return; }
     if (!pendingFile) { alert('이미지를 먼저 선택해 주세요.'); return; }
     var name = assetName.value.trim() || pendingFile.name || '자료';
     var saveBtn = document.getElementById('asset-save');
@@ -1175,10 +1233,10 @@ function baseTotalAmount() {
     var fd = new FormData();
     fd.append('file', pendingFile);
     fd.append('name', name);
-    fetch('/api/assets', { method: 'POST', headers: { 'x-admin-key': adminKey }, body: fd })
+    fetch('/api/assets', { method: 'POST', headers: adminHeaders(), body: fd })
       .then(function (r) { return r.json().then(function (d) { return { status: r.status, d: d }; }); })
       .then(function (res) {
-        if (res.status === 401) { alert('관리자 인증에 실패했습니다. 다시 로그인해 주세요.'); return; }
+        if (res.status === 401) { handleAdminExpired(); return; }
         if (!res.d || !res.d.ok) { alert('업로드 실패: ' + ((res.d && res.d.error) || '알 수 없는 오류')); return; }
         assetName.value = ''; assetFile.value = ''; pendingFile = null;
         loadAssetsFromServer();
@@ -1191,7 +1249,7 @@ function baseTotalAmount() {
   document.getElementById('asset-list').addEventListener('click', function (e) {
     var edit = e.target.closest('[data-edit-asset]');
     if (edit) {
-      if (!isAdmin) return;
+      if (!isAdmin || !adminToken) return;
       var eid = edit.getAttribute('data-edit-asset');
       var cur = null; for (var j = 0; j < assetsCache.length; j++) if (assetsCache[j].id === eid) cur = assetsCache[j];
       var newName = prompt('자료 이름을 수정하세요.', (cur && cur.name) || '');
@@ -1200,12 +1258,12 @@ function baseTotalAmount() {
       if (!newName) { alert('이름을 입력해 주세요.'); return; }
       fetch('/api/assets/' + encodeURIComponent(eid), {
         method: 'PATCH',
-        headers: { 'x-admin-key': adminKey, 'Content-Type': 'application/json' },
+        headers: adminHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ name: newName })
       })
         .then(function (r) { return r.json().then(function (d) { return { status: r.status, d: d }; }); })
         .then(function (res) {
-          if (res.status === 401) { alert('관리자 인증에 실패했습니다. 다시 로그인해 주세요.'); return; }
+          if (res.status === 401) { handleAdminExpired(); return; }
           if (!res.d || !res.d.ok) { alert('이름 수정 실패: ' + ((res.d && res.d.error) || '오류')); return; }
           loadAssetsFromServer();
         })
@@ -1214,13 +1272,13 @@ function baseTotalAmount() {
     }
     var del = e.target.closest('[data-del-asset]');
     if (del) {
-      if (!isAdmin) return;
+      if (!isAdmin || !adminToken) return;
       var id = del.getAttribute('data-del-asset');
       if (!confirm('이 자료를 삭제할까요? (서버에서 영구 삭제됩니다)')) return;
-      fetch('/api/assets/' + encodeURIComponent(id), { method: 'DELETE', headers: { 'x-admin-key': adminKey } })
+      fetch('/api/assets/' + encodeURIComponent(id), { method: 'DELETE', headers: adminHeaders() })
         .then(function (r) { return r.json().then(function (d) { return { status: r.status, d: d }; }); })
         .then(function (res) {
-          if (res.status === 401) { alert('관리자 인증에 실패했습니다. 다시 로그인해 주세요.'); return; }
+          if (res.status === 401) { handleAdminExpired(); return; }
           if (!res.d || !res.d.ok) { alert('삭제 실패: ' + ((res.d && res.d.error) || '오류')); return; }
           loadAssetsFromServer();
         })
@@ -1247,6 +1305,7 @@ function baseTotalAmount() {
     downloadBlob(blob, '골프정산_백업_' + todayIso() + '.json');
   });
   document.getElementById('admin-restore').addEventListener('change', function (e) {
+    if (!isAdmin || !adminToken) { e.target.value = ''; alert('백업 복원은 관리자만 할 수 있습니다.'); return; }
     var f = e.target.files[0]; if (!f) return;
     var reader = new FileReader();
     reader.onload = function () {
