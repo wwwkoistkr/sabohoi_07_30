@@ -16,7 +16,7 @@
   /* ── 컬럼 고정 폭(px). ch 단위는 폰트/브라우저마다 달라 정렬이 깨져 px로 고정 ── */
   --w-no: 42px;
   --w-name: 80px;    /* 회원 이름: 한글 4자 */
-  --w-phone: 72px;   /* 양지번호: 숫자 6자리 */
+  --w-phone: 72px;   /* 평균타수 */
   --w-date: 44px;    /* 타수: 숫자 3자리 */
   --w-rank: 30px;    /* 순위: 숫자 2자리 */
   --w-total: 72px;   /* 평균타수 */
@@ -133,7 +133,7 @@ html, body {
 
 /* 잠긴(읽기전용) 입력칸 */
 .money-input.locked, .name-input.locked, .phone-input.locked {
-  cursor: default; background: transparent;
+  cursor: not-allowed; background: #f1f3f4; color: #7b8790 !important;
 }
 .money-input.locked:focus, .name-input.locked:focus, .phone-input.locked:focus {
   outline: none; background: #f5f5f5;
@@ -202,9 +202,17 @@ html, body {
 .col-rank { background: #f3cf57 !important; color: #3a2a00 !important; }
 .col-total { width: var(--w-total); min-width: var(--w-total); background: var(--gold) !important; color: #3a2a00; }
 
-.date-head { display: flex; flex-direction: column; align-items: center; gap: 0; position: relative; }
+.date-head { display: flex; flex-direction: column; align-items: center; gap: 2px; position: relative; }
 .date-head .date-text { font-size: 14px; font-weight: 800; }
 .date-head .date-sub { font-size: 10px; opacity: .8; }
+.date-sort-btn {
+  border: 1px solid rgba(255,255,255,.75); border-radius: 999px;
+  background: rgba(255,255,255,.12); color: #fff;
+  padding: 2px 7px; font-size: 9px; font-weight: 800; line-height: 1.2;
+  cursor: pointer; white-space: nowrap;
+}
+.date-sort-btn:hover { background: rgba(255,255,255,.25); }
+.date-sort-btn.active { background: var(--gold); border-color: #ffe082; color: #3a2a00; }
 /* 날짜 칸 입력값의 의미(타수)를 헤더에 작게 표기 */
 .date-head .date-lost {
   margin-top: 2px; font-size: 10px; font-weight: 700;
@@ -284,6 +292,13 @@ html, body {
 }
 .name-input { font-weight: 700; }
 .phone-input { color: var(--muted); font-size: 13px; letter-spacing: .5px; }
+.cell-average {
+  color: var(--red);
+  font-weight: 800;
+  text-align: center;
+  padding: 10px 2px;
+  font-variant-numeric: tabular-nums;
+}
 .money-input { text-align: right; padding-right: 10px; font-variant-numeric: tabular-nums; }
 .money-input.has-val { color: var(--red); font-weight: 700; }
 .cell-name input::placeholder, .cell-phone input::placeholder,
@@ -596,7 +611,7 @@ html, body {
   :root {
     --w-no: 26px;
     --w-name: 52px;    /* 회원 이름: 한글 4자 */
-    --w-phone: 42px;
+    --w-phone: 50px;   /* 평균타수 */
     --w-date: 36px;    /* 타수: 숫자 3자리 */
     --w-rank: 24px;    /* 순위: 숫자 2자리 */
     --w-total: 60px;   /* 평균타수 */
@@ -659,13 +674,13 @@ html, body {
 }
 
 /* ===== 실제 스마트폰(≤480px): 고정열을 더 좁혀 날짜를 2~3일 보이게 =====
-   No/이름/양지번호/합계 고정폭을 최소화하고 날짜 폭도 줄여, 좁은 폰에서도
+   No/이름/평균타수 고정폭을 최소화하고 날짜 폭도 줄여, 좁은 폰에서도
    날짜가 1일만 나오지 않고 여러 날 + 접힘(···+N일)이 함께 보이도록 한다. */
 @media (max-width: 480px) {
   :root {
     --w-no: 20px;
     --w-name: 44px;    /* 회원 이름: 한글 4자 기준 */
-    --w-phone: 34px;   /* 양지번호: 최소폭 */
+    --w-phone: 42px;   /* 평균타수 */
     --w-date: 30px;    /* 타수: 숫자 3자리 */
     --w-rank: 22px;    /* 순위: 숫자 2자리 */
     --w-total: 48px;   /* 평균타수 */
@@ -673,6 +688,7 @@ html, body {
   .sheet thead th { padding: 8px 1px; font-size: 10.5px; }
   .date-head .date-text { font-size: 11.5px; }
   .date-head .date-sub { font-size: 8.5px; }
+  .date-sort-btn { padding: 2px 4px; font-size: 8px; }
   .date-head .date-lost { font-size: 8px; padding: 1px 3px; }
   .cell-money input { font-size: 11.5px; padding: 9px 1px; }
   .cell-name input { font-size: 10.5px; padding-left: 1px; padding-right: 1px; }

@@ -14,6 +14,7 @@ const ADMIN_SESSION_MS = 8 * 60 * 60 * 1000
 const LOGIN_WINDOW_MS = 15 * 60 * 1000
 const MAX_LOGIN_FAILURES = 5
 const MAX_JSON_BYTES = 1024 * 1024
+const EDIT_WINDOW_MS = 24 * 60 * 60 * 1000
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif'])
 
 type AdminTokenPayload = { sub: 'admin'; iat: number; exp: number; nonce: string }
@@ -23,6 +24,10 @@ type SheetData = {
   members: Array<{ id: string; name?: string; phone?: string }>;
   dates: Array<{ id: string; iso?: string }>;
   cells?: Record<string, unknown>;
+  editTimes?: {
+    names?: Record<string, unknown>;
+    cells?: Record<string, unknown>;
+  };
   labels?: unknown;
   [key: string]: unknown;
 }
@@ -186,13 +191,6 @@ function isMeaningfulValue(value: unknown): boolean {
   return true
 }
 
-function removesMapValue(current: unknown, next: unknown): boolean {
-  if (!current || typeof current !== 'object' || Array.isArray(current)) return false
-  const before = current as Record<string, unknown>
-  const after = next && typeof next === 'object' && !Array.isArray(next) ? next as Record<string, unknown> : {}
-  return Object.keys(before).some((key) => isMeaningfulValue(before[key]) && !isMeaningfulValue(after[key]))
-}
-
 function removesNestedValue(current: unknown, next: unknown): boolean {
   if (current && typeof current === 'object' && !Array.isArray(current)) {
     const before = current as Record<string, unknown>
@@ -202,8 +200,38 @@ function removesNestedValue(current: unknown, next: unknown): boolean {
   return isMeaningfulValue(current) && !isMeaningfulValue(next)
 }
 
-function requiresAdminForSheetChange(current: SheetData | null, next: SheetData): boolean {
+function numericEditTime(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
+}
+
+function currentEditTimes(data: SheetData | null): { names: Record<string, number>; cells: Record<string, number> } {
+  const names: Record<string, number> = {}
+  const cells: Record<string, number> = {}
+  if (!data?.editTimes || typeof data.editTimes !== 'object') return { names, cells }
+  const sourceNames = data.editTimes.names
+  const sourceCells = data.editTimes.cells
+  if (sourceNames && typeof sourceNames === 'object' && !Array.isArray(sourceNames)) {
+    for (const [key, value] of Object.entries(sourceNames)) {
+      const timestamp = numericEditTime(value)
+      if (timestamp) names[key] = timestamp
+    }
+  }
+  if (sourceCells && typeof sourceCells === 'object' && !Array.isArray(sourceCells)) {
+    for (const [key, value] of Object.entries(sourceCells)) {
+      const timestamp = numericEditTime(value)
+      if (timestamp) cells[key] = timestamp
+    }
+  }
+  return { names, cells }
+}
+
+function editWindowExpired(timestamp: number, now: number): boolean {
+  return !timestamp || now - timestamp >= EDIT_WINDOW_MS
+}
+
+function requiresAdminForSheetChange(current: SheetData | null, next: SheetData, now: number): boolean {
   if (!current) return false
+  const times = currentEditTimes(current)
   const nextMemberIds = new Set(next.members.map((member) => member.id))
   const nextDateIds = new Set(next.dates.map((date) => date.id))
   if (current.members.some((member) => !nextMemberIds.has(member.id))) return true
@@ -211,13 +239,42 @@ function requiresAdminForSheetChange(current: SheetData | null, next: SheetData)
   for (const member of current.members) {
     const nextMember = next.members.find((candidate) => candidate.id === member.id)
     if (!nextMember) return true
-    if (isMeaningfulValue(member.name) && !isMeaningfulValue(nextMember.name)) return true
+    if (member.name !== nextMember.name && isMeaningfulValue(member.name)) {
+      if (!isMeaningfulValue(nextMember.name) || editWindowExpired(times.names[member.id], now)) return true
+    }
     if (isMeaningfulValue(member.phone) && !isMeaningfulValue(nextMember.phone)) return true
   }
-  if (removesMapValue(current.cells, next.cells)) return true
+  const currentCells = current.cells || {}
+  const nextCells = next.cells || {}
+  for (const [key, currentScore] of Object.entries(currentCells)) {
+    const nextScore = nextCells[key]
+    if (currentScore === nextScore || !isMeaningfulValue(currentScore)) continue
+    if (!isMeaningfulValue(nextScore) || editWindowExpired(times.cells[key], now)) return true
+  }
   if (removesNestedValue(current.extra, next.extra)) return true
   if (removesNestedValue(current.manager, next.manager)) return true
   return JSON.stringify(current.labels ?? null) !== JSON.stringify(next.labels ?? null)
+}
+
+function withServerEditTimes(current: SheetData | null, next: SheetData, now: number): SheetData {
+  const previousTimes = currentEditTimes(current)
+  const previousMembers = new Map((current?.members || []).map((member) => [member.id, member]))
+  const previousCells = current?.cells || {}
+  const names: Record<string, number> = {}
+  const cells: Record<string, number> = {}
+
+  for (const member of next.members) {
+    if (!isMeaningfulValue(member.name)) continue
+    const previous = previousMembers.get(member.id)
+    if (!previous || !isMeaningfulValue(previous.name)) names[member.id] = now
+    else if (previousTimes.names[member.id]) names[member.id] = previousTimes.names[member.id]
+  }
+  for (const [key, score] of Object.entries(next.cells || {})) {
+    if (!isMeaningfulValue(score)) continue
+    if (!isMeaningfulValue(previousCells[key])) cells[key] = now
+    else if (previousTimes.cells[key]) cells[key] = previousTimes.cells[key]
+  }
+  return { ...next, editTimes: { names, cells } }
 }
 
 async function readD1Sheet(c: Context<AppEnv>): Promise<{ rev: number; data: SheetData | null }> {
@@ -410,7 +467,7 @@ app.delete('/api/assets/:id', async (c) => {
 app.get('/api/sheet', async (c) => {
   try {
     const current = await readD1Sheet(c)
-    return c.json({ ok: true, rev: current.rev, data: current.data, storage: { data: 'D1', images: 'R2' } })
+    return c.json({ ok: true, rev: current.rev, data: current.data, serverNow: Date.now(), editWindowMs: EDIT_WINDOW_MS, storage: { data: 'D1', images: 'R2' } })
   } catch (error) {
     logError('sheet read failed', error, c.req.path)
     return c.json({ ok: false, error: errorMessage(error) }, 500);
@@ -433,13 +490,15 @@ app.put('/api/sheet', async (c) => {
     if (typeof body.baseRev === 'number' && body.baseRev !== curRev) {
       return c.json({ ok: false, conflict: true, rev: curRev, data: current.data }, 409);
     }
-    const needsAdmin = requiresAdminForSheetChange(current.data, body.data)
+    const now = Date.now()
+    const needsAdmin = requiresAdminForSheetChange(current.data, body.data, now)
     const isAuthorizedAdmin = needsAdmin ? await verifyAdminRequest(c) : false
     if (needsAdmin && !isAuthorizedAdmin) {
-      return c.json({ ok: false, error: 'admin authorization required' }, 403);
+      return c.json({ ok: false, error: 'admin authorization required', reason: 'edit window expired or delete attempted' }, 403);
     }
+    const nextData = withServerEditTimes(current.data, body.data, now)
     const newRev = curRev + 1;
-    const payload = JSON.stringify(body.data);
+    const payload = JSON.stringify(nextData);
     const result = await c.env.DB.prepare(
       'UPDATE app_state SET rev = ?, data_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1 AND rev = ?'
     ).bind(newRev, payload, curRev).run()
@@ -448,7 +507,7 @@ app.put('/api/sheet', async (c) => {
       return c.json({ ok: false, conflict: true, rev: latest.rev, data: latest.data }, 409)
     }
     if (isAuthorizedAdmin) await recordAdminAudit(c, 'admin_update', 'app_state', '1', { rev: newRev })
-    return c.json({ ok: true, rev: newRev });
+    return c.json({ ok: true, rev: newRev, data: nextData, serverNow: now, editWindowMs: EDIT_WINDOW_MS });
   } catch (error) {
     logError('sheet write failed', error, c.req.path)
     return c.json({ ok: false, error: errorMessage(error) }, 500);
@@ -465,7 +524,7 @@ app.get('/', (c) => {
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⛳</text></svg>">
   <title>사보회</title>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
-  <link href="/static/style.css?v=20260801d1" rel="stylesheet">
+  <link href="/static/style.css?v=20260801d3" rel="stylesheet">
 </head>
 <body>
   <header class="app-header" id="app-header">
@@ -484,7 +543,7 @@ app.get('/', (c) => {
 
   <main class="app-main" id="view-sheet">
     <div id="mode-banner" class="mode-banner mode-user">
-      <i class="fas fa-pen"></i><span class="mode-banner-text">일반 사용자 모드 · 값을 <b>입력·수정</b>할 수 있습니다. 기존 값·회원·날짜·이미지 삭제는 관리자만 가능합니다.</span>
+      <i class="fas fa-clock"></i><span class="mode-banner-text">일반 사용자 모드 · 회원이름과 타수는 <b>입력 후 24시간</b> 동안 수정할 수 있습니다. 이후 수정과 모든 삭제는 관리자만 가능합니다.</span>
     </div>
     <div class="table-wrap" id="table-wrap">
       <table id="sheet" class="sheet">
@@ -535,7 +594,7 @@ app.get('/', (c) => {
             <label class="lbl-row"><span>상단 제목</span><input id="lbl-title" type="text" maxlength="24" placeholder="사보회" /></label>
             <label class="lbl-row"><span>날짜칸 의미</span><input id="lbl-lost" type="text" maxlength="12" placeholder="타수" /></label>
             <label class="lbl-row"><span>이름 열 제목</span><input id="lbl-name" type="text" maxlength="12" placeholder="회원 이름" /></label>
-            <label class="lbl-row"><span>번호 열 제목</span><input id="lbl-phone" type="text" maxlength="12" placeholder="양지번호" /></label>
+            <label class="lbl-row"><span>평균타수 열 제목</span><input id="lbl-phone" type="text" maxlength="12" placeholder="평균타수" /></label>
 
           </div>
           <div class="admin-btns">
@@ -609,7 +668,7 @@ app.get('/', (c) => {
     </div>
   </div>
 
-  <script src="/static/app.js?v=20260801d1"></script>
+  <script src="/static/app.js?v=20260801d3"></script>
 </body>
 </html>`)
 })

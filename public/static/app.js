@@ -7,14 +7,16 @@
   var DEFAULT_DATE_COUNT = 3;   // 앱 기본 날짜 개수(3개). 많아지면 접기로 처리.
   var isAdmin = false; // 관리자 로그인 여부 (수정/삭제 권한)
   var MAX_SCORE = 999; // 타수 입력 상한
+  var EDIT_WINDOW_MS = 24 * 60 * 60 * 1000; // 최초 입력 후 일반 사용자 수정 가능 시간
   var adminToken = '';     // 서버가 로그인 성공 후 발급한 8시간 만료 토큰(메모리에만 보관)
   var assetsCache = [];    // 서버(R2)에서 받아온 자료실 목록
   var assetsLoaded = false;
 
   // 날짜가 많아 화면을 넘어가면 가운데 오래된 날짜 열을 자동으로 접어(숨겨)
-  // 회원이름·양지번호·최근 날짜 몇 개·평균타수가 한 화면에 보이게 함.
+  // 회원이름·평균타수·최근 날짜 몇 개가 한 화면에 보이게 함.
   var collapseEnabled = true;   // 접기 사용 여부
   var expandTimer = null;       // '초기화(펼쳐보기)' 후 자동 복귀 타이머
+  var sortedDateId = '';        // 정렬 버튼으로 선택한 날짜(화면 정렬 전용)
 
   var state = load();
 
@@ -31,7 +33,8 @@
           manager: d.manager || { name: '', phone: '' },
           widths: d.widths || {},
           labels: mergeLabels(d.labels),  // 화면 문구(제목/라벨) — 관리자 수정 가능
-          extra: normalizeExtra(d.extra)  // 지출액/잔액(합계 열 아래 2개 행)
+          extra: normalizeExtra(d.extra), // 지출액/잔액(합계 열 아래 2개 행)
+          editTimes: normalizeEditTimes(d.editTimes)
           // assets(자료실 이미지)는 이제 서버(R2)에 저장 → localStorage에 두지 않음
         };
       }
@@ -40,7 +43,7 @@
       members: makeDefaultMembers(),
       dates: makeDefaultDates(),  // 골프 친 날짜 기본 3개(많아지면 접기)
       cells: {}, manager: { name: '', phone: '' }, widths: {}, labels: mergeLabels(null),
-      extra: normalizeExtra(null)  // 지출액/잔액(합계 열 아래 2개 행)
+      extra: normalizeExtra(null), editTimes: normalizeEditTimes(null)
     };
   }
   // 지출액/잔액 값을 항상 {expense, balance} 숫자 형태로 정규화
@@ -54,6 +57,19 @@
         out.legacyExpense = Number(saved.expense) || 0;
       }
     }
+    return out;
+  }
+  function normalizeEditTimes(saved) {
+    var out = { names: {}, cells: {} };
+    if (!saved || typeof saved !== 'object') return out;
+    ['names', 'cells'].forEach(function (group) {
+      var source = saved[group];
+      if (!source || typeof source !== 'object' || Array.isArray(source)) return;
+      Object.keys(source).forEach(function (key) {
+        var timestamp = Number(source[key]) || 0;
+        if (timestamp > 0) out[group][key] = timestamp;
+      });
+    });
     return out;
   }
   function expenseFor(dateId) {
@@ -87,7 +103,7 @@ function baseTotalAmount() {
       title: '사보회',                      // 상단 제목
       lost: '타수',                         // 날짜 칸 안 점수의 의미
       colName: '회원 이름',                // 이름 열 제목
-      colPhone: '양지번호',                // 번호 열 제목
+      colPhone: '평균타수',                // 평균타수 열 제목(기존 데이터 키 호환)
     };
   }
   // 저장된 labels에 기본값을 덮어씌워 항상 모든 키가 존재하도록 병합
@@ -99,6 +115,7 @@ function baseTotalAmount() {
       var oldValue = (typeof saved[k] === 'string' && saved[k].trim()) ? saved[k] : '';
       if (k === 'title' && oldValue === '골프등급표') oldValue = '사보회';
       if (k === 'lost' && oldValue === '잃은 돈') oldValue = '타수';
+      if (k === 'colPhone' && (oldValue === '평균금액' || oldValue === '양지번호')) oldValue = '평균타수';
       out[k] = oldValue || def[k];
     });
     return out;
@@ -152,7 +169,7 @@ function baseTotalAmount() {
     return {
       members: state.members, dates: state.dates, cells: state.cells,
       manager: state.manager, widths: state.widths, labels: state.labels,
-      extra: state.extra || { expenses: {} }
+      extra: state.extra || { expenses: {} }, editTimes: normalizeEditTimes(state.editTimes)
     };
   }
 
@@ -189,12 +206,16 @@ function baseTotalAmount() {
         isSavingToServer = false;
         if (isAdmin) handleAdminExpired();
         else if (res.status === 403) {
-          alert('기존 값 삭제는 관리자 로그인이 필요합니다. 서버의 원래 값으로 되돌립니다.');
+          alert('입력 후 24시간이 지난 값의 수정 또는 기존 값 삭제는 관리자 로그인이 필요합니다. 서버의 원래 값으로 되돌립니다.');
           reloadFromServer();
         }
         return;
       }
-      if (res.body && res.body.ok) { serverRev = res.body.rev || serverRev; }
+      if (res.body && res.body.ok) {
+        serverRev = res.body.rev || serverRev;
+        if (res.body.editWindowMs) EDIT_WINDOW_MS = Number(res.body.editWindowMs) || EDIT_WINDOW_MS;
+        if (res.body.data) applyServerData(res.body.data);
+      }
       isSavingToServer = false;
       if (pendingServerSave) { pendingServerSave = false; scheduleServerSave(); }
     }).catch(function () {
@@ -206,6 +227,7 @@ function baseTotalAmount() {
     return fetch('/api/sheet').then(function (r) { return r.json(); }).then(function (j) {
       if (j && j.ok) {
         serverRev = j.rev || 0;
+        if (j.editWindowMs) EDIT_WINDOW_MS = Number(j.editWindowMs) || EDIT_WINDOW_MS;
         if (j.data && j.data.members) {
           lastAppliedJson = JSON.stringify(j.data);
           pendingServerData = null;
@@ -235,6 +257,8 @@ function baseTotalAmount() {
     state.widths = d.widths || {};
     state.labels = mergeLabels(d.labels);
     state.extra = normalizeExtra(d.extra);  // 지출액/잔액도 서버 값으로 동기화
+    state.editTimes = normalizeEditTimes(d.editTimes);
+    if (sortedDateId && !findDate(sortedDateId)) sortedDateId = '';
     saveLocal();
     render();
     renderAdmin && renderAdmin();
@@ -245,6 +269,7 @@ function baseTotalAmount() {
     return fetch('/api/sheet').then(function (r) { return r.json(); }).then(function (j) {
       if (j && j.ok) {
         serverRev = j.rev || 0;
+        if (j.editWindowMs) EDIT_WINDOW_MS = Number(j.editWindowMs) || EDIT_WINDOW_MS;
         if (j.data && j.data.members) {
           lastAppliedJson = JSON.stringify(j.data);
           applyServerData(j.data);
@@ -266,6 +291,7 @@ function baseTotalAmount() {
       fetch('/api/sheet').then(function (r) { return r.json(); }).then(function (j) {
         if (j && j.ok && j.rev > serverRev && j.data && j.data.members) {
           serverRev = j.rev;
+          if (j.editWindowMs) EDIT_WINDOW_MS = Number(j.editWindowMs) || EDIT_WINDOW_MS;
           var incoming = JSON.stringify(j.data);
           if (incoming !== lastAppliedJson) {
             lastAppliedJson = incoming;
@@ -289,8 +315,33 @@ function baseTotalAmount() {
   function todayIso() { var d = new Date(), p = function (n) { return String(n).padStart(2, '0'); }; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); }
   function escapeHtml(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
+  // 회원이름·타수는 최초 입력 시각부터 24시간 동안 일반 사용자가 수정할 수 있다.
+  // 브라우저 표시는 편의를 위한 것이며 최종 권한은 서버가 같은 규칙으로 다시 검사한다.
+  function editTimestamp(group, key) {
+    return Number(state.editTimes && state.editTimes[group] && state.editTimes[group][key]) || 0;
+  }
+  function withinEditWindow(timestamp) { return timestamp > 0 && Date.now() - timestamp < EDIT_WINDOW_MS; }
+  function canEditName(member) {
+    if (isAdmin || !(member && String(member.name || '').trim())) return true;
+    return withinEditWindow(editTimestamp('names', member.id));
+  }
+  function canEditScore(memberId, dateId) {
+    var key = cellKey(memberId, dateId);
+    if (isAdmin || !(Number(state.cells[key]) || 0)) return true;
+    return withinEditWindow(editTimestamp('cells', key));
+  }
+  function rememberInitialEdit(group, key) {
+    if (!state.editTimes) state.editTimes = normalizeEditTimes(null);
+    if (!state.editTimes[group][key]) state.editTimes[group][key] = Date.now();
+  }
+
   // ---------- 합계 ----------
   function memberTotal(id) { var s = 0; state.dates.forEach(function (d) { s += Number(state.cells[cellKey(id, d.id)]) || 0; }); return s; }
+  function memberParticipationCount(id) {
+    var count = 0;
+    state.dates.forEach(function (d) { if ((Number(state.cells[cellKey(id, d.id)]) || 0) > 0) count++; });
+    return count;
+  }
   function memberAverageScore(id) {
     var total = 0, participatedDays = 0;
     state.dates.forEach(function (d) {
@@ -305,15 +356,25 @@ function baseTotalAmount() {
   }
   function dateTotal(id) { var s = 0; state.members.forEach(function (m) { s += Number(state.cells[cellKey(m.id, id)]) || 0; }); return s; }
   function grandTotal() { var s = 0; state.members.forEach(function (m) { s += memberTotal(m.id); }); return s; }
+  function compareMembersForDate(left, right, dateId) {
+    var leftScore = Number(state.cells[cellKey(left.id, dateId)]) || 0;
+    var rightScore = Number(state.cells[cellKey(right.id, dateId)]) || 0;
+    if (!leftScore && !rightScore) return state.members.indexOf(left) - state.members.indexOf(right);
+    if (!leftScore) return 1;
+    if (!rightScore) return -1;
+    if (leftScore !== rightScore) return leftScore - rightScore;
+    var attendanceDifference = memberParticipationCount(right.id) - memberParticipationCount(left.id);
+    if (attendanceDifference) return attendanceDifference;
+    return state.members.indexOf(left) - state.members.indexOf(right);
+  }
   function rankFor(memberId, dateId) {
     var score = Number(state.cells[cellKey(memberId, dateId)]) || 0;
     if (!score) return '';
-    var lower = 0;
-    state.members.forEach(function (m) {
-      var other = Number(state.cells[cellKey(m.id, dateId)]) || 0;
-      if (other > 0 && other < score) lower++;
-    });
-    return lower + 1;
+    var ranked = state.members.filter(function (m) {
+      return (Number(state.cells[cellKey(m.id, dateId)]) || 0) > 0;
+    }).sort(function (a, b) { return compareMembersForDate(a, b, dateId); });
+    for (var i = 0; i < ranked.length; i++) if (ranked[i].id === memberId) return i + 1;
+    return '';
   }
   function dateBestScore(dateId) {
     var best = 0;
@@ -324,28 +385,14 @@ function baseTotalAmount() {
     return best;
   }
   function dateWinnerNames(dateId) {
-    var best = dateBestScore(dateId);
-    if (!best) return '';
-    return state.members.filter(function (m) {
-      return (Number(state.cells[cellKey(m.id, dateId)]) || 0) === best;
-    }).map(function (m) { return (m.name || '').trim(); }).filter(Boolean).join(', ');
+    var winner = state.members.filter(function (m) {
+      return (Number(state.cells[cellKey(m.id, dateId)]) || 0) > 0;
+    }).sort(function (a, b) { return compareMembersForDate(a, b, dateId); })[0];
+    return winner ? (winner.name || '').trim() : '';
   }
-  function activeRankDate() {
-    var today = todayIso();
-    var exact = state.dates.filter(function (d) { return d.iso === today; })[0];
-    if (exact) return exact;
-    return state.dates.slice().sort(function (a, b) { return b.iso.localeCompare(a.iso); })[0] || null;
-  }
-  function membersByActiveRank() {
-    var d = activeRankDate();
-    if (!d) return state.members.slice();
-    return state.members.map(function (m, index) { return { member: m, index: index, score: Number(state.cells[cellKey(m.id, d.id)]) || 0 }; })
-      .sort(function (a, b) {
-        if (!a.score && !b.score) return a.index - b.index;
-        if (!a.score) return 1;
-        if (!b.score) return -1;
-        return a.score - b.score || a.index - b.index;
-      }).map(function (x) { return x.member; });
+  function membersForDisplay() {
+    if (!sortedDateId || !findDate(sortedDateId)) return state.members.slice();
+    return state.members.slice().sort(function (a, b) { return compareMembersForDate(a, b, sortedDateId); });
   }
 
   // ---------- 렌더 ----------
@@ -412,6 +459,15 @@ function baseTotalAmount() {
     for (var i = dates.length - 1; i >= 0 && visible.length < MAX_VISIBLE; i--) {
       visible.unshift(dates[i]);
     }
+    // 오래된 날짜로 정렬한 뒤 다시 접혀도, 선택한 날짜와 정렬해제 버튼은 계속 보이게 한다.
+    if (sortedDateId && !visible.some(function (d) { return d.id === sortedDateId; })) {
+      var sortedDate = findDate(sortedDateId);
+      if (sortedDate) {
+        if (visible.length >= MAX_VISIBLE) visible.shift();
+        visible.push(sortedDate);
+        visible.sort(function (a, b) { return dates.indexOf(a) - dates.indexOf(b); });
+      }
+    }
     var visibleIds = {};
     visible.forEach(function (d) { visibleIds[d.id] = true; });
     var hiddenIds = [];
@@ -449,9 +505,9 @@ function baseTotalAmount() {
       h += '<th class="col-fold" rowspan="2" title="숨겨진 날짜 ' + _vd.hiddenCount + '개 · 눌러서 전체 펼치기"><div class="fold-head"><span class="fold-dots">···</span><span class="fold-cnt">+' + _vd.hiddenCount + '일</span></div></th>';
     }
     _vd.visible.forEach(function (d) {
-      h += '<th class="col-date-group" colspan="2"><div class="date-head"><span class="date-text">' + fmtDate(d.iso) + '</span><span class="date-sub">' + fmtDateFull(d.iso) + '</span>' + (isAdmin ? '<button class="date-del" data-del-date="' + d.id + '" title="이 날짜 삭제"><i class="fas fa-xmark"></i></button>' : '') + '</div></th>';
+      var sortActive = sortedDateId === d.id;
+      h += '<th class="col-date-group" colspan="2"><div class="date-head"><span class="date-text">' + fmtDate(d.iso) + '</span><span class="date-sub">' + fmtDateFull(d.iso) + '</span><button class="date-sort-btn' + (sortActive ? ' active' : '') + '" data-sort-date="' + d.id + '" title="' + (sortActive ? '회원 기본순서로 돌아가기' : '이 날짜 순위대로 회원 전체 행 정렬') + '"><i class="fas fa-arrow-down-short-wide"></i> ' + (sortActive ? '정렬해제' : '정렬') + '</button>' + (isAdmin ? '<button class="date-del" data-del-date="' + d.id + '" title="이 날짜 삭제"><i class="fas fa-xmark"></i></button>' : '') + '</div></th>';
     });
-    h += '<th class="col-total" rowspan="2">평균타수</th>';
     h += '</tr><tr class="date-sub-row">';
     _vd.visible.forEach(function (d) {
       h += '<th class="col-date col-score" data-col="date:' + d.id + '"' + wStyle('date:' + d.id) + '>' + escapeHtml(lostLabel()) + '<span class="col-resize" data-rz="date:' + d.id + '"></span></th>';
@@ -468,18 +524,19 @@ function baseTotalAmount() {
 
   function renderBody() {
     var h = '';
-    membersByActiveRank().forEach(function (m, idx) {
+    membersForDisplay().forEach(function (m, idx) {
+      var nameEditable = canEditName(m);
       h += '<tr>';
       h += '<td class="cell-no">' + (idx + 1) + (isAdmin ? '<button class="row-del" data-del-member="' + m.id + '" title="이 회원 행 삭제"><i class="fas fa-xmark"></i></button>' : '') + '</td>';
-      h += '<td class="cell-name" data-col="name"' + wStyle('name') + '><input type="text" maxlength="4" class="' + inputCls('name-input', !!m.name) + '" data-name="' + m.id + '" value="' + escapeHtml(m.name) + '" placeholder="이름4자" /></td>';
-      h += '<td class="cell-phone" data-col="phone"' + wStyle('phone') + '><input type="tel" inputmode="tel" maxlength="6" class="' + inputCls('phone-input', !!m.phone) + '" data-phone="' + m.id + '" value="' + escapeHtml(m.phone) + '" placeholder="번호6자" /></td>';
+      h += '<td class="cell-name" data-col="name"' + wStyle('name') + '><input type="text" maxlength="4" class="' + inputCls('name-input', !!m.name) + (nameEditable ? '' : ' locked') + '" data-name="' + m.id + '" value="' + escapeHtml(m.name) + '" placeholder="이름4자"' + (nameEditable ? '' : ' readonly title="입력 후 24시간이 지나 관리자만 수정할 수 있습니다"') + ' /></td>';
+      h += '<td class="cell-phone cell-average" data-col="phone" data-average-member="' + m.id + '"' + wStyle('phone') + '>' + fmtAverage(memberAverageScore(m.id)) + '</td>';
       if (_vd.hiddenCount > 0) h += '<td class="cell-fold" title="숨겨진 날짜"></td>';
       _vd.visible.forEach(function (d) {
         var val = state.cells[cellKey(m.id, d.id)];
-        h += '<td class="cell-money" data-col="date:' + d.id + '"' + wStyle('date:' + d.id) + '><input type="text" inputmode="numeric" maxlength="3" data-m="' + m.id + '" data-d="' + d.id + '" class="' + inputCls('money-input', !!val) + (val ? ' has-val' : '') + '" value="' + (val ? fmt(val) : '') + '" placeholder="0" /></td>';
+        var scoreEditable = canEditScore(m.id, d.id);
+        h += '<td class="cell-money" data-col="date:' + d.id + '"' + wStyle('date:' + d.id) + '><input type="text" inputmode="numeric" maxlength="3" data-m="' + m.id + '" data-d="' + d.id + '" class="' + inputCls('money-input', !!val) + (val ? ' has-val' : '') + (scoreEditable ? '' : ' locked') + '" value="' + (val ? fmt(val) : '') + '" placeholder="0"' + (scoreEditable ? '' : ' readonly title="입력 후 24시간이 지나 관리자만 수정할 수 있습니다"') + ' /></td>';
         h += '<td class="cell-rank" data-rank-member="' + m.id + '" data-rank-date="' + d.id + '">' + (rankFor(m.id, d.id) || '') + '</td>';
       });
-      h += '<td class="cell-total" data-average-member="' + m.id + '">' + fmtAverage(memberAverageScore(m.id)) + '</td>';
       h += '</tr>';
     });
     body.innerHTML = h;
@@ -491,13 +548,12 @@ function baseTotalAmount() {
     _vd.visible.forEach(function (d) {
       h += '<td colspan="2" class="foot-winner" data-winner-date="' + d.id + '">' + escapeHtml(dateWinnerNames(d.id)) + '</td>';
     });
-    h += '<td class="foot-average"></td>';
     h += '</tr>';
 
     var valueSpan = (_vd.hiddenCount > 0 ? 1 : 0) + (_vd.visible.length * 2);
     if (valueSpan < 1) valueSpan = 1;
     var total = currentTotalAmount();
-    h += '<tr class="foot-extra-row foot-total-row"><td class="foot-extra-label" colspan="3"><i class="fas fa-coins"></i>총액</td><td colspan="' + valueSpan + '" class="foot-extra-cell foot-total-cell"><input type="text" inputmode="numeric" pattern="[0-9]*" class="extra-input total-input has-val" data-total-amount="1" value="' + fmt(total) + '" placeholder="0" /></td><td class="foot-average"></td></tr>';
+    h += '<tr class="foot-extra-row foot-total-row"><td class="foot-extra-label" colspan="3"><i class="fas fa-coins"></i>총액</td><td colspan="' + valueSpan + '" class="foot-extra-cell foot-total-cell"><input type="text" inputmode="numeric" pattern="[0-9]*" class="extra-input total-input has-val" data-total-amount="1" value="' + fmt(total) + '" placeholder="0" /></td></tr>';
 
     h += '<tr class="foot-extra-row foot-expense-row"><td class="foot-extra-label" colspan="3"><i class="fas fa-money-bill-wave"></i>날짜별 지출</td>';
     if (_vd.hiddenCount > 0) h += '<td class="foot-extra-filler"></td>';
@@ -505,7 +561,7 @@ function baseTotalAmount() {
       var ex = expenseFor(d.id);
       h += '<td colspan="2" class="foot-extra-cell foot-date-value"><input type="text" inputmode="numeric" pattern="[0-9]*" class="extra-input' + (ex ? ' has-val' : '') + '" data-expense-date="' + d.id + '" value="' + (ex ? fmt(ex) : '') + '" placeholder="0" /></td>';
     });
-    h += '<td class="foot-average"></td></tr>';
+    h += '</tr>';
 
     h += '<tr class="foot-extra-row foot-balance-row"><td class="foot-extra-label" colspan="3"><i class="fas fa-wallet"></i>날짜별 잔액</td>';
     if (_vd.hiddenCount > 0) h += '<td class="foot-extra-filler"></td>';
@@ -513,7 +569,7 @@ function baseTotalAmount() {
       var balance = balanceFor(d.id);
       h += '<td colspan="2" class="foot-extra-cell foot-balance-cell foot-date-value' + (balance < 0 ? ' neg' : '') + '" data-balance-date="' + d.id + '">' + fmt(balance) + '</td>';
     });
-    h += '<td class="foot-average"></td></tr>';
+    h += '</tr>';
     foot.innerHTML = h;
   }
 
@@ -558,26 +614,48 @@ function baseTotalAmount() {
     var t = e.target;
     if (t.matches('.money-input')) {
       var num = parseNum(t.value);
+      var k = cellKey(t.getAttribute('data-m'), t.getAttribute('data-d'));
+      var previousScore = Number(state.cells[k]) || 0;
+      if (!isAdmin && previousScore && !canEditScore(t.getAttribute('data-m'), t.getAttribute('data-d'))) {
+        t.value = previousScore ? fmt(previousScore) : '';
+        alert('입력 후 24시간이 지난 타수는 관리자만 수정할 수 있습니다.');
+        return;
+      }
       if (!isAdmin && !num && parseNum(t.dataset.originalValue)) {
         t.value = t.dataset.originalValue;
         alert('기존 타수 삭제는 관리자만 할 수 있습니다.');
         return;
       }
-      var k = cellKey(t.getAttribute('data-m'), t.getAttribute('data-d'));
       // 금액 상한: 십만원(100,000). 초과 입력 시 상한값으로 고정
       if (num > MAX_SCORE) { num = MAX_SCORE; t.value = String(MAX_SCORE); }
       if (num < 0) num = 0;
-      if (num) state.cells[k] = num; else delete state.cells[k];
+      if (num) {
+        if (!previousScore) rememberInitialEdit('cells', k);
+        state.cells[k] = num;
+      } else {
+        delete state.cells[k];
+        if (state.editTimes && state.editTimes.cells) delete state.editTimes.cells[k];
+      }
       t.classList.toggle('has-val', !!num); refreshTotals(); save();
       if (qpTarget === t && quickCur) quickCur.textContent = fmt(num); // 팝오버 현재값 동기화
     } else if (t.matches('.name-input')) {
+      var m1 = findMember(t.getAttribute('data-name'));
+      if (!m1) return;
+      var previousName = String(m1.name || '');
+      if (!isAdmin && previousName.trim() && !canEditName(m1)) {
+        t.value = previousName;
+        alert('입력 후 24시간이 지난 회원이름은 관리자만 수정할 수 있습니다.');
+        return;
+      }
       if (!isAdmin && !t.value.trim() && (t.dataset.originalValue || '').trim()) {
         t.value = t.dataset.originalValue;
         alert('기존 회원 이름 삭제는 관리자만 할 수 있습니다.');
         return;
       }
-      var m1 = findMember(t.getAttribute('data-name'));
-      if (m1) { m1.name = t.value; save(); }
+      if (!previousName.trim() && t.value.trim()) rememberInitialEdit('names', m1.id);
+      m1.name = t.value;
+      if (!t.value.trim() && state.editTimes && state.editTimes.names) delete state.editTimes.names[m1.id];
+      save();
     } else if (t.matches('.phone-input')) {
       if (!isAdmin && !t.value.trim() && (t.dataset.originalValue || '').trim()) {
         t.value = t.dataset.originalValue;
@@ -682,27 +760,28 @@ function baseTotalAmount() {
     else return;
     e.preventDefault();
 
+    var displayedMembers = membersForDisplay();
     var idx = -1;
-    for (var i = 0; i < state.members.length; i++) if (state.members[i].id === id) { idx = i; break; }
+    for (var i = 0; i < displayedMembers.length; i++) if (displayedMembers[i].id === id) { idx = i; break; }
     if (idx === -1) return;
 
     // 마지막 행이면 회원 추가
-    if (idx === state.members.length - 1) {
+    if (idx === displayedMembers.length - 1) {
       state.members.push({ id: uid(), name: '', phone: '' });
       save(); render();
+      displayedMembers = membersForDisplay();
     }
     // 다음 행의 같은 종류 칸으로 포커스
-    var rows = body.querySelectorAll('tr');
-    var next = rows[idx + 1];
-    if (!next) return;
+    var nextMember = displayedMembers[idx + 1];
+    if (!nextMember) return;
     var sel = kind === 'name' ? '.name-input' : kind === 'phone' ? '.phone-input' : '.money-input';
     var el;
     if (kind === 'money') {
       // 금액은 같은 날짜(data-d) 열을 유지
       var d = t.getAttribute('data-d');
-      el = next.querySelector('.money-input[data-d="' + d + '"]');
+      el = body.querySelector('.money-input[data-m="' + nextMember.id + '"][data-d="' + d + '"]');
     } else {
-      el = next.querySelector(sel);
+      el = body.querySelector(sel + '[data-name="' + nextMember.id + '"]');
     }
     if (el) { el.focus(); try { el.select(); } catch (x) {} }
   });
@@ -713,8 +792,8 @@ function baseTotalAmount() {
   var qpTarget = null; // 현재 편집 중인 money-input
 
   function qpCanEdit(t) {
-    // 모든 금액칸을 누구나 편집 가능
-    return true;
+    if (!t || t.readOnly) return false;
+    return canEditScore(t.getAttribute('data-m'), t.getAttribute('data-d'));
   }
 
   function openQuickPad(t) {
@@ -741,10 +820,26 @@ function baseTotalAmount() {
 
   function applyQuickValue(num) {
     if (!qpTarget) return;
+    if (!qpCanEdit(qpTarget)) {
+      alert('입력 후 24시간이 지난 타수는 관리자만 수정할 수 있습니다.');
+      closeQuickPad();
+      return;
+    }
     if (num > MAX_SCORE) num = MAX_SCORE;
     if (num < 0) num = 0;
     var k = cellKey(qpTarget.getAttribute('data-m'), qpTarget.getAttribute('data-d'));
-    if (num) state.cells[k] = num; else delete state.cells[k];
+    var previousScore = Number(state.cells[k]) || 0;
+    if (!isAdmin && !num && previousScore) {
+      alert('기존 타수 삭제는 관리자만 할 수 있습니다.');
+      return;
+    }
+    if (num) {
+      if (!previousScore) rememberInitialEdit('cells', k);
+      state.cells[k] = num;
+    } else {
+      delete state.cells[k];
+      if (state.editTimes && state.editTimes.cells) delete state.editTimes.cells[k];
+    }
     qpTarget.value = num ? String(num) : '';
     qpTarget.classList.toggle('has-val', !!num);
     quickCur.textContent = fmt(num);
@@ -811,11 +906,22 @@ function baseTotalAmount() {
     if (confirm(label + ' 회원 행을 삭제할까요?')) {
       state.members = state.members.filter(function (x) { return x.id !== id; });
       Object.keys(state.cells).forEach(function (k) { if (k.split('|')[0] === id) delete state.cells[k]; });
+      if (state.editTimes) {
+        delete state.editTimes.names[id];
+        Object.keys(state.editTimes.cells || {}).forEach(function (k) { if (k.split('|')[0] === id) delete state.editTimes.cells[k]; });
+      }
       save(); render();
     }
   });
   // 접힘 열('···+N일') 클릭 → 전체 날짜 펼쳐보기(15초 후 자동 복귀)
   head.addEventListener('click', function (e) {
+    var sortButton = e.target.closest('[data-sort-date]');
+    if (sortButton) {
+      var dateId = sortButton.getAttribute('data-sort-date');
+      sortedDateId = sortedDateId === dateId ? '' : dateId;
+      render();
+      return;
+    }
     if (e.target.closest('.col-fold')) { expandAllTemporarily(); }
   });
   body.addEventListener('click', function (e) {
@@ -830,6 +936,8 @@ function baseTotalAmount() {
     if (d && confirm('"' + fmtDateFull(d.iso) + '" 날짜 열을 삭제할까요? 해당 타수도 삭제됩니다.')) {
       state.dates = state.dates.filter(function (x) { return x.id !== id; });
       Object.keys(state.cells).forEach(function (k) { if (k.split('|')[1] === id) delete state.cells[k]; });
+      if (state.editTimes) Object.keys(state.editTimes.cells || {}).forEach(function (k) { if (k.split('|')[1] === id) delete state.editTimes.cells[k]; });
+      if (sortedDateId === id) sortedDateId = '';
       delete state.widths['date:' + id];
       save(); render();
     }
@@ -938,10 +1046,11 @@ function baseTotalAmount() {
       state.members = makeDefaultMembers();
       state.dates = makeDefaultDates();
       state.cells = {}; state.manager = { name: '', phone: '' }; state.widths = {};
+      state.editTimes = normalizeEditTimes(null);
       state.labels = defaultLabels();
       state.extra = { expenses: {} };
       mgrName.value = ''; mgrPhone.value = '';
-      collapseEnabled = true;
+      collapseEnabled = true; sortedDateId = '';
       save(); render();
     }
   }
@@ -949,24 +1058,21 @@ function baseTotalAmount() {
   // ---------- CSV ----------
   function exportCsv() {
     var rows = [];
-    var header = ['No', '회원 이름', '양지번호'];
+    var header = ['No', '회원 이름', '평균타수'];
     state.dates.forEach(function (d) { header.push(fmtDateFull(d.iso) + ' 타수'); header.push(fmtDateFull(d.iso) + ' 순위'); });
-    header.push('평균타수');
     rows.push(header);
     state.members.forEach(function (m, i) {
-      var row = [i + 1, m.name || '', m.phone || ''];
+      var row = [i + 1, m.name || '', fmtAverage(memberAverageScore(m.id))];
       state.dates.forEach(function (d) { row.push(state.cells[cellKey(m.id, d.id)] || 0); row.push(rankFor(m.id, d.id) || ''); });
-      row.push(fmtAverage(memberAverageScore(m.id)));
       rows.push(row);
     });
     var winnerRow = ['', '날짜별 1등', ''];
     state.dates.forEach(function (d) { winnerRow.push(dateBestScore(d.id) || ''); winnerRow.push(dateWinnerNames(d.id)); });
-    winnerRow.push('');
     rows.push(winnerRow);
     var span = state.dates.length * 2;
-    var totalRow = ['', '총액', '']; for (var i = 0; i < span - 1; i++) totalRow.push(''); totalRow.push(currentTotalAmount()); totalRow.push(''); rows.push(totalRow);
-    var expRow = ['', '날짜별 지출', '']; state.dates.forEach(function (d) { expRow.push(expenseFor(d.id)); expRow.push(''); }); expRow.push(''); rows.push(expRow);
-    var balRow = ['', '날짜별 잔액', '']; state.dates.forEach(function (d) { balRow.push(balanceFor(d.id)); balRow.push(''); }); balRow.push(''); rows.push(balRow);
+    var totalRow = ['', '총액', '']; for (var i = 0; i < span - 1; i++) totalRow.push(''); totalRow.push(currentTotalAmount()); rows.push(totalRow);
+    var expRow = ['', '날짜별 지출', '']; state.dates.forEach(function (d) { expRow.push(expenseFor(d.id)); expRow.push(''); }); rows.push(expRow);
+    var balRow = ['', '날짜별 잔액', '']; state.dates.forEach(function (d) { balRow.push(balanceFor(d.id)); balRow.push(''); }); rows.push(balRow);
     var csv = rows.map(function (r) { return r.map(function (c) { var v = String(c == null ? '' : c); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(','); }).join('\n');
     var blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
     downloadBlob(blob, '사보회_' + todayIso() + '.csv');
@@ -1039,6 +1145,7 @@ function baseTotalAmount() {
     adminToken = '';
     updateAdminBtn();
     if (viewAdmin && !viewAdmin.classList.contains('hidden')) closeAdmin();
+    else render();
     if (showMessage) alert('관리자 인증이 만료되었습니다. 다시 로그인해 주세요.');
   }
 
@@ -1060,7 +1167,7 @@ function baseTotalAmount() {
         banner.innerHTML = '<i class="fas fa-lock-open"></i><span class="mode-banner-text">관리자 모드 · 모든 값을 <b>수정·삭제</b>할 수 있습니다</span>';
       } else {
         banner.className = 'mode-banner mode-user';
-        banner.innerHTML = '<i class="fas fa-pen"></i><span class="mode-banner-text">일반 사용자 모드 · 값을 <b>입력·수정</b>할 수 있습니다. 기존 값·회원·날짜·이미지 삭제는 관리자만 가능합니다.</span>';
+        banner.innerHTML = '<i class="fas fa-clock"></i><span class="mode-banner-text">일반 사용자 모드 · 회원이름과 타수는 <b>입력 후 24시간</b> 동안 수정할 수 있습니다. 이후 수정과 모든 삭제는 관리자만 가능합니다.</span>';
       }
     }
   }
@@ -1195,6 +1302,7 @@ function baseTotalAmount() {
         var cd = findDate(cid);
         if (cd && confirm('"' + fmtDateFull(cd.iso) + '" 날짜의 입력 타수를 모두 비울까요?\n※ 날짜 열은 그대로 두고 타수만 지웁니다.')) {
           state.members.forEach(function (m) { delete state.cells[cellKey(m.id, cid)]; });
+          if (state.editTimes) state.members.forEach(function (m) { delete state.editTimes.cells[cellKey(m.id, cid)]; });
           save(); render(); renderDateManage();
         }
       } else if (delBtn) {
@@ -1203,6 +1311,8 @@ function baseTotalAmount() {
         if (dd && confirm('"' + fmtDateFull(dd.iso) + '" 날짜 열을 완전히 삭제할까요?\n※ 해당 날짜의 모든 타수도 함께 삭제됩니다.')) {
           state.dates = state.dates.filter(function (x) { return x.id !== did; });
           Object.keys(state.cells).forEach(function (k) { if (k.split('|')[1] === did) delete state.cells[k]; });
+          if (state.editTimes) Object.keys(state.editTimes.cells || {}).forEach(function (k) { if (k.split('|')[1] === did) delete state.editTimes.cells[k]; });
+          if (sortedDateId === did) sortedDateId = '';
           delete state.widths['date:' + did];
           save(); render(); renderDateManage();
         }
