@@ -666,8 +666,9 @@ html, body {
   /* 모바일에서는 컬럼 드래그 리사이즈 핸들을 숨긴다(불안정 방지, 고정폭 유지) */
   .col-resize { display: none !important; }
   .table-wrap {
+    height: min(420px, calc(100dvh - 120px));
     max-height: calc(100dvh - 120px);
-    min-height: 320px;
+    min-height: 0;
     overscroll-behavior: contain;
   }
   .sheet { font-size: 13px; }
@@ -678,15 +679,15 @@ html, body {
   }
   .sheet tfoot td {
     position: sticky;
-    height: 34px;
+    height: 30px;
     box-sizing: border-box;
-    padding-top: 5px;
-    padding-bottom: 5px;
+    padding-top: 3px;
+    padding-bottom: 3px;
   }
   .sheet tfoot tr.foot-balance-row td { position: sticky !important; bottom: 0; }
-  .sheet tfoot tr.foot-expense-row td { position: sticky !important; bottom: 34px; }
-  .sheet tfoot tr.foot-total-row td { position: sticky !important; bottom: 68px; }
-  .sheet tfoot tr.foot-winner-row td { position: sticky !important; bottom: 102px; }
+  .sheet tfoot tr.foot-expense-row td { position: sticky !important; bottom: 30px; }
+  .sheet tfoot tr.foot-total-row td { position: sticky !important; bottom: 60px; }
+  .sheet tfoot tr.foot-winner-row td { position: sticky !important; bottom: 90px; }
   .sheet tfoot td.foot-label,
   .sheet tfoot td.foot-extra-label { z-index: 18; }
   .sheet tfoot td.foot-winner {
@@ -694,7 +695,7 @@ html, body {
     white-space: nowrap;
     text-overflow: ellipsis;
   }
-  .cell-name input, .cell-phone input, .cell-money input { padding: 9px 3px; font-size: 13px; }
+  .cell-name input, .cell-phone input, .cell-money input { padding: 7px 3px; font-size: 12.5px; line-height: 1.2; }
   .admin-cards { grid-template-columns: 1fr; }
   .asset-list { grid-template-columns: repeat(auto-fill, minmax(46%, 1fr)); }
   .storage-architecture { grid-template-columns: 1fr; }
@@ -709,20 +710,28 @@ html, body {
    날짜가 1일만 나오지 않고 여러 날 + 접힘(···+N일)이 함께 보이도록 한다. */
 @media (max-width: 480px) {
   :root {
-    --w-no: 20px;
-    --w-name: 44px;    /* 회원 이름: 한글 4자 기준 */
-    --w-phone: 34px;   /* 양지번호: 최소폭 */
-    --w-date: 30px;    /* 타수: 숫자 3자리 */
-    --w-rank: 22px;    /* 순위: 숫자 2자리 */
-    --w-total: 48px;   /* 평균타수 */
+    --w-no: 18px;
+    --w-name: 42px;    /* 회원 이름: 한글 4자 기준 */
+    --w-phone: 30px;   /* 양지번호: 최소폭 */
+    --w-date: 28px;    /* 타수: 숫자 3자리 */
+    --w-rank: 20px;    /* 순위: 숫자 2자리 */
+    --w-total: 46px;   /* 평균타수 */
   }
   .sheet thead th { padding: 8px 1px; font-size: 10.5px; }
+  .col-fold, .cell-fold, .foot-fold {
+    width: 24px; min-width: 24px; max-width: 24px;
+  }
+  .cell-no { font-size: 10px; }
+  .cell-no .row-del {
+    width: 16px; height: 16px; margin: 1px auto 0;
+    font-size: 9px;
+  }
   .date-head .date-text { font-size: 11.5px; }
   .date-head .date-sub { font-size: 8.5px; }
   .date-head .date-lost { font-size: 8px; padding: 1px 3px; }
-  .cell-money input { font-size: 11.5px; padding: 9px 1px; }
-  .cell-name input { font-size: 10.5px; padding-left: 1px; padding-right: 1px; }
-  .cell-phone input { font-size: 11px; }
+  .cell-money input { font-size: 11.5px; padding: 6px 1px; }
+  .cell-name input { font-size: 10.5px; padding: 6px 1px; }
+  .cell-phone input { font-size: 10.5px; padding: 6px 1px; }
   .col-total, .cell-total, .foot-grand { font-size: 10px; white-space: normal !important; line-height: 1.05; }
   .average-head { gap: 2px; }
   .average-sort-btn { padding: 1px 4px; font-size: 8.5px; }
