@@ -260,7 +260,7 @@ html, body {
   border-right: 1px solid var(--grid);
 }
 .col-total, .cell-total {
-  position: sticky; right: 0; z-index: 6;
+  position: static;
 }
 .sheet thead th.col-total { z-index: 14; }
 .sheet tfoot td.foot-grand { position: sticky; right: 0; bottom: 0; z-index: 13; }
@@ -666,7 +666,7 @@ html, body {
   /* 모바일에서는 컬럼 드래그 리사이즈 핸들을 숨긴다(불안정 방지, 고정폭 유지) */
   .col-resize { display: none !important; }
   .table-wrap {
-    height: clamp(360px, 56dvh, 460px);
+    height: calc(100dvh - 120px);
     max-height: calc(100dvh - 120px);
     min-height: 0;
     overscroll-behavior: contain;
