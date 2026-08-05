@@ -201,6 +201,19 @@ html, body {
 .sheet thead .date-sub-row th { position: static; padding: 5px 3px; }
 .col-rank { background: #f3cf57 !important; color: #3a2a00 !important; }
 .col-total { width: var(--w-total); min-width: var(--w-total); background: var(--gold) !important; color: #3a2a00; }
+.average-head { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.average-sort-btn {
+  border: 1px solid rgba(58,42,0,.35);
+  border-radius: 7px;
+  padding: 2px 7px;
+  background: #fff7cf;
+  color: #3a2a00;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.average-sort-btn:active { transform: translateY(1px); background: #ffe88c; }
 
 .date-head { display: flex; flex-direction: column; align-items: center; gap: 0; position: relative; }
 .date-head .date-text { font-size: 14px; font-weight: 800; }
@@ -338,6 +351,12 @@ html, body {
   width: var(--w-total); min-width: var(--w-total);
   background: var(--green-soft) !important;
   border-left: 1px solid var(--grid-strong);
+}
+.foot-average-winner {
+  color: var(--green-dark) !important;
+  font-weight: 900 !important;
+  text-align: center !important;
+  white-space: nowrap;
 }
 
 /* --- Footer --- */
@@ -652,6 +671,11 @@ html, body {
     overscroll-behavior: contain;
   }
   .sheet { font-size: 13px; }
+  .sheet thead {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+  }
   .sheet tfoot td {
     position: sticky;
     height: 34px;
@@ -659,10 +683,10 @@ html, body {
     padding-top: 5px;
     padding-bottom: 5px;
   }
-  .sheet tfoot tr.foot-balance-row td { bottom: 0; }
-  .sheet tfoot tr.foot-expense-row td { bottom: 34px; }
-  .sheet tfoot tr.foot-total-row td { bottom: 68px; }
-  .sheet tfoot tr.foot-winner-row td { bottom: 102px; }
+  .sheet tfoot tr.foot-balance-row td { position: sticky !important; bottom: 0; }
+  .sheet tfoot tr.foot-expense-row td { position: sticky !important; bottom: 34px; }
+  .sheet tfoot tr.foot-total-row td { position: sticky !important; bottom: 68px; }
+  .sheet tfoot tr.foot-winner-row td { position: sticky !important; bottom: 102px; }
   .sheet tfoot td.foot-label,
   .sheet tfoot td.foot-extra-label { z-index: 18; }
   .sheet tfoot td.foot-winner {
@@ -700,6 +724,8 @@ html, body {
   .cell-name input { font-size: 10.5px; padding-left: 1px; padding-right: 1px; }
   .cell-phone input { font-size: 11px; }
   .col-total, .cell-total, .foot-grand { font-size: 10px; white-space: normal !important; line-height: 1.05; }
+  .average-head { gap: 2px; }
+  .average-sort-btn { padding: 1px 4px; font-size: 8.5px; }
   .sheet tfoot td.foot-extra-cell .extra-input,
   .sheet tfoot td.foot-balance-cell { font-size: 11px; padding: 8px 3px; text-align: right; }
   .sheet tfoot td.foot-date-value,

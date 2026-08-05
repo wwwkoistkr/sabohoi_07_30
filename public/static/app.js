@@ -348,6 +348,13 @@ function baseTotalAmount() {
     if (!winner) return '';
     return Array.from((winner.member.name || '').trim()).slice(0, 3).join('');
   }
+  function averageWinnerName() {
+    var winner = membersByAverage().filter(function (m) {
+      return memberParticipationCount(m.id) > 0 && (m.name || '').trim();
+    })[0];
+    if (!winner) return '';
+    return Array.from((winner.name || '').trim()).slice(0, 3).join('');
+  }
   function membersByAverage() {
     return state.members.map(function (m, index) {
       return {
@@ -468,7 +475,7 @@ function baseTotalAmount() {
     _vd.visible.forEach(function (d) {
       h += '<th class="col-date-group" colspan="2"><div class="date-head"><span class="date-text">' + fmtDate(d.iso) + '</span><span class="date-sub">' + fmtDateFull(d.iso) + '</span>' + (isAdmin ? '<button class="date-del" data-del-date="' + d.id + '" title="이 날짜 삭제"><i class="fas fa-xmark"></i></button>' : '') + '</div></th>';
     });
-    h += '<th class="col-total" rowspan="2">평균타수</th>';
+    h += '<th class="col-total" rowspan="2"><div class="average-head"><span>평균타수</span><button type="button" class="average-sort-btn" data-sort-average="1" title="평균타수가 낮은 회원부터 정렬">정렬</button></div></th>';
     h += '</tr><tr class="date-sub-row">';
     _vd.visible.forEach(function (d) {
       h += '<th class="col-date col-score" data-col="date:' + d.id + '"' + wStyle('date:' + d.id) + '>' + escapeHtml(lostLabel()) + '<span class="col-resize" data-rz="date:' + d.id + '"></span></th>';
@@ -508,7 +515,7 @@ function baseTotalAmount() {
     _vd.visible.forEach(function (d) {
       h += '<td colspan="2" class="foot-winner" data-winner-date="' + d.id + '">' + escapeHtml(dateWinnerNames(d.id)) + '</td>';
     });
-    h += '<td class="foot-average"></td>';
+    h += '<td class="foot-average foot-average-winner" data-average-winner="1">' + escapeHtml(averageWinnerName()) + '</td>';
     h += '</tr>';
 
     var valueSpan = (_vd.hiddenCount > 0 ? 1 : 0) + (_vd.visible.length * 2);
@@ -563,6 +570,8 @@ function baseTotalAmount() {
       var winner = foot.querySelector('[data-winner-date="' + d.id + '"]');
       if (winner) winner.textContent = dateWinnerNames(d.id);
     });
+    var averageWinner = foot.querySelector('[data-average-winner]');
+    if (averageWinner) averageWinner.textContent = averageWinnerName();
     var g = foot.querySelector('[data-total-amount]'); if (g && document.activeElement !== g) g.value = fmt(currentTotalAmount());
     refreshBalance();
   }
@@ -570,6 +579,14 @@ function baseTotalAmount() {
   function findMember(id) { for (var i = 0; i < state.members.length; i++) if (state.members[i].id === id) return state.members[i]; return null; }
   function findDate(id) { for (var i = 0; i < state.dates.length; i++) if (state.dates[i].id === id) return state.dates[i]; return null; }
 
+  head.addEventListener('click', function (e) {
+    var sortButton = e.target.closest('[data-sort-average]');
+    if (!sortButton) return;
+    renderBody();
+    applyWidths();
+    var tableWrap = document.getElementById('table-wrap');
+    if (tableWrap) tableWrap.scrollTop = 0;
+  });
   // ---------- 입력 ----------
   body.addEventListener('input', function (e) {
     var t = e.target;
