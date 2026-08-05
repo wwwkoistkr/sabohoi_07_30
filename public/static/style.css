@@ -646,8 +646,30 @@ html, body {
   .mode-banner i { margin-top: 1px; }
   /* 모바일에서는 컬럼 드래그 리사이즈 핸들을 숨긴다(불안정 방지, 고정폭 유지) */
   .col-resize { display: none !important; }
-  .table-wrap { max-height: calc(100vh - 120px); }
+  .table-wrap {
+    max-height: calc(100dvh - 120px);
+    min-height: 320px;
+    overscroll-behavior: contain;
+  }
   .sheet { font-size: 13px; }
+  .sheet tfoot td {
+    position: sticky;
+    height: 34px;
+    box-sizing: border-box;
+    padding-top: 5px;
+    padding-bottom: 5px;
+  }
+  .sheet tfoot tr.foot-balance-row td { bottom: 0; }
+  .sheet tfoot tr.foot-expense-row td { bottom: 34px; }
+  .sheet tfoot tr.foot-total-row td { bottom: 68px; }
+  .sheet tfoot tr.foot-winner-row td { bottom: 102px; }
+  .sheet tfoot td.foot-label,
+  .sheet tfoot td.foot-extra-label { z-index: 18; }
+  .sheet tfoot td.foot-winner {
+    font-size: 12px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
   .cell-name input, .cell-phone input, .cell-money input { padding: 9px 3px; font-size: 13px; }
   .admin-cards { grid-template-columns: 1fr; }
   .asset-list { grid-template-columns: repeat(auto-fill, minmax(46%, 1fr)); }

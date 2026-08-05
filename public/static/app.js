@@ -299,6 +299,13 @@ function baseTotalAmount() {
     });
     return participatedDays ? total / participatedDays : 0;
   }
+  function memberParticipationCount(id) {
+    var count = 0;
+    state.dates.forEach(function (d) {
+      if ((Number(state.cells[cellKey(id, d.id)]) || 0) > 0) count++;
+    });
+    return count;
+  }
   function fmtAverage(value) {
     if (!value) return '';
     return Number.isInteger(value) ? String(value) : value.toFixed(1);
@@ -326,25 +333,35 @@ function baseTotalAmount() {
   function dateWinnerNames(dateId) {
     var best = dateBestScore(dateId);
     if (!best) return '';
-    return state.members.filter(function (m) {
-      return (Number(state.cells[cellKey(m.id, dateId)]) || 0) === best;
-    }).map(function (m) { return (m.name || '').trim(); }).filter(Boolean).join(', ');
+    var winner = state.members.map(function (m, index) {
+      return {
+        member: m,
+        index: index,
+        score: Number(state.cells[cellKey(m.id, dateId)]) || 0,
+        participatedDays: memberParticipationCount(m.id)
+      };
+    }).filter(function (x) {
+      return x.score === best && (x.member.name || '').trim();
+    }).sort(function (a, b) {
+      return b.participatedDays - a.participatedDays || a.index - b.index;
+    })[0];
+    if (!winner) return '';
+    return Array.from((winner.member.name || '').trim()).slice(0, 3).join('');
   }
-  function activeRankDate() {
-    var today = todayIso();
-    var exact = state.dates.filter(function (d) { return d.iso === today; })[0];
-    if (exact) return exact;
-    return state.dates.slice().sort(function (a, b) { return b.iso.localeCompare(a.iso); })[0] || null;
-  }
-  function membersByActiveRank() {
-    var d = activeRankDate();
-    if (!d) return state.members.slice();
-    return state.members.map(function (m, index) { return { member: m, index: index, score: Number(state.cells[cellKey(m.id, d.id)]) || 0 }; })
+  function membersByAverage() {
+    return state.members.map(function (m, index) {
+      return {
+        member: m,
+        index: index,
+        average: memberAverageScore(m.id),
+        participatedDays: memberParticipationCount(m.id)
+      };
+    })
       .sort(function (a, b) {
-        if (!a.score && !b.score) return a.index - b.index;
-        if (!a.score) return 1;
-        if (!b.score) return -1;
-        return a.score - b.score || a.index - b.index;
+        if (!a.participatedDays && !b.participatedDays) return a.index - b.index;
+        if (!a.participatedDays) return 1;
+        if (!b.participatedDays) return -1;
+        return a.average - b.average || b.participatedDays - a.participatedDays || a.index - b.index;
       }).map(function (x) { return x.member; });
   }
 
@@ -468,7 +485,7 @@ function baseTotalAmount() {
 
   function renderBody() {
     var h = '';
-    membersByActiveRank().forEach(function (m, idx) {
+    membersByAverage().forEach(function (m, idx) {
       h += '<tr>';
       h += '<td class="cell-no">' + (idx + 1) + (isAdmin ? '<button class="row-del" data-del-member="' + m.id + '" title="이 회원 행 삭제"><i class="fas fa-xmark"></i></button>' : '') + '</td>';
       h += '<td class="cell-name" data-col="name"' + wStyle('name') + '><input type="text" maxlength="4" class="' + inputCls('name-input', !!m.name) + '" data-name="' + m.id + '" value="' + escapeHtml(m.name) + '" placeholder="이름4자" /></td>';
