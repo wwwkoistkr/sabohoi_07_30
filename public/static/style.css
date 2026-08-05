@@ -666,7 +666,7 @@ html, body {
   /* 모바일에서는 컬럼 드래그 리사이즈 핸들을 숨긴다(불안정 방지, 고정폭 유지) */
   .col-resize { display: none !important; }
   .table-wrap {
-    height: min(420px, calc(100dvh - 120px));
+    height: clamp(360px, 56dvh, 460px);
     max-height: calc(100dvh - 120px);
     min-height: 0;
     overscroll-behavior: contain;
@@ -695,7 +695,7 @@ html, body {
     white-space: nowrap;
     text-overflow: ellipsis;
   }
-  .cell-name input, .cell-phone input, .cell-money input { padding: 7px 3px; font-size: 12.5px; line-height: 1.2; }
+  .cell-name input, .cell-phone input, .cell-money input { padding: clamp(5px, .9dvh, 8px) 3px; font-size: 12.5px; line-height: 1.2; }
   .admin-cards { grid-template-columns: 1fr; }
   .asset-list { grid-template-columns: repeat(auto-fill, minmax(46%, 1fr)); }
   .storage-architecture { grid-template-columns: 1fr; }
@@ -729,9 +729,9 @@ html, body {
   .date-head .date-text { font-size: 11.5px; }
   .date-head .date-sub { font-size: 8.5px; }
   .date-head .date-lost { font-size: 8px; padding: 1px 3px; }
-  .cell-money input { font-size: 11.5px; padding: 6px 1px; }
-  .cell-name input { font-size: 10.5px; padding: 6px 1px; }
-  .cell-phone input { font-size: 10.5px; padding: 6px 1px; }
+  .cell-money input { font-size: 11.5px; padding: clamp(5px, .8dvh, 7px) 1px; }
+  .cell-name input { font-size: 10.5px; padding: clamp(5px, .8dvh, 7px) 1px; }
+  .cell-phone input { font-size: 10.5px; padding: clamp(5px, .8dvh, 7px) 1px; }
   .col-total, .cell-total, .foot-grand { font-size: 10px; white-space: normal !important; line-height: 1.05; }
   .average-head { gap: 2px; }
   .average-sort-btn { padding: 1px 4px; font-size: 8.5px; }
