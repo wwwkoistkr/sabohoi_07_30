@@ -16,7 +16,6 @@
   /* ── 컬럼 고정 폭(px). ch 단위는 폰트/브라우저마다 달라 정렬이 깨져 px로 고정 ── */
   --w-no: 42px;
   --w-name: 80px;    /* 회원 이름: 한글 4자 */
-  --w-phone: 72px;   /* 양지번호: 숫자 6자리 */
   --w-date: 44px;    /* 타수: 숫자 3자리 */
   --w-rank: 30px;    /* 순위: 숫자 2자리 */
   --w-total: 72px;   /* 평균타수 */
@@ -132,10 +131,10 @@ html, body {
 .banner-btn:hover { background: rgba(0,0,0,.06); }
 
 /* 잠긴(읽기전용) 입력칸 */
-.money-input.locked, .name-input.locked, .phone-input.locked {
+.money-input.locked, .name-input.locked {
   cursor: default; background: transparent;
 }
-.money-input.locked:focus, .name-input.locked:focus, .phone-input.locked:focus {
+.money-input.locked:focus, .name-input.locked:focus {
   outline: none; background: #f5f5f5;
 }
 .admin-note {
@@ -193,7 +192,6 @@ html, body {
 /* 폭은 px 고정값. header/body/foot 모두 같은 값을 써야 정렬이 맞음 */
 .col-no    { width: var(--w-no);    min-width: var(--w-no); }
 .col-name  { width: var(--w-name);  min-width: var(--w-name); }
-.col-phone { width: var(--w-phone); min-width: var(--w-phone); }
 .col-date { width: var(--w-date); min-width: var(--w-date); }
 .col-rank { width: var(--w-rank); min-width: var(--w-rank); }
 .col-date-group { background: var(--green) !important; border-left: 2px solid #f3cf57; }
@@ -288,27 +286,25 @@ html, body {
 .cell-no .row-del { display: flex; }
 
 /* --- Input cells --- 헤더가 가운데 정렬이므로 입력칸도 전부 가운데 정렬 --- */
-.cell-name, .cell-phone, .cell-money { padding: 0; background: #fff; }
+.cell-name, .cell-money { padding: 0; background: #fff; }
 .cell-rank { background: #fff9dc; color: var(--green-dark); font-weight: 900; text-align: center; padding: 10px 1px; border-right: 2px solid #f3cf57; }
-.cell-name input, .cell-phone input, .cell-money input {
+.cell-name input, .cell-money input {
   width: 100%; border: none; background: transparent;
   padding: 10px 6px; font-size: 14px; color: var(--text);
   text-align: center; text-overflow: ellipsis;
 }
 .name-input { font-weight: 700; }
-.phone-input { color: var(--muted); font-size: 13px; letter-spacing: .5px; }
 .money-input { text-align: right; padding-right: 10px; font-variant-numeric: tabular-nums; }
 .money-input.has-val { color: var(--red); font-weight: 700; }
-.cell-name input::placeholder, .cell-phone input::placeholder,
+.cell-name input::placeholder,
 .money-input::placeholder { color: #cbd5da; font-weight: 400; font-size: 11px; }
 
-.cell-name input:focus, .cell-phone input:focus, .cell-money input:focus {
+.cell-name input:focus, .cell-money input:focus {
   outline: 2px solid var(--gold); outline-offset: -2px; background: #fffef5;
 }
 
 /* zebra */
 .sheet tbody tr:nth-child(even) .cell-name,
-.sheet tbody tr:nth-child(even) .cell-phone,
 .sheet tbody tr:nth-child(even) .cell-money { background: #fafbfc; }
 .sheet tbody tr:nth-child(even) .cell-rank { background: #fff5c7; }
 .sheet tbody tr:nth-child(even) .cell-no { background: #dcefe4; }
@@ -609,24 +605,21 @@ html, body {
 /* ===== 좁은 컬럼 폭: 900px 이하 모든 기기(큰 폰·가로화면·태블릿 포함) =====
    ⚠️ 중요: 컬럼 폭 축소는 반드시 넓은 범위(900px)에 둔다.
    과거엔 640px 이하에서만 좁혀서, 641px 이상으로 인식되는 기기(대형 스마트폰/
-   태블릿/가로모드)에서 데스크탑용 넓은 양지번호(96px)가 나와 다른 컬럼을
-   밀어내는 문제가 있었음. 이 블록은 오직 컬럼 폭만 담당한다. */
+   태블릿/가로모드)에서도 표가 화면 안에 들어오도록 이 블록에서 컬럼 폭을 줄인다. */
 @media (max-width: 900px) {
   :root {
     --w-no: 26px;
     --w-name: 52px;    /* 회원 이름: 한글 4자 */
-    --w-phone: 42px;
     --w-date: 36px;    /* 타수: 숫자 3자리 */
     --w-rank: 24px;    /* 순위: 숫자 2자리 */
     --w-total: 60px;   /* 평균타수 */
   }
   /* 좁은 칸에 맞춰 헤더 글자를 작게 + 2줄 허용(칸 폭이 헤더 글자에 눌려 안 줄어드는 것 방지) */
   .sheet thead th { padding: 9px 2px; font-size: 12px; letter-spacing: 0; }
-  .sheet thead th.col-name, .sheet thead th.col-phone { white-space: normal; word-break: keep-all; line-height: 1.15; }
+  .sheet thead th.col-name { white-space: normal; word-break: keep-all; line-height: 1.15; }
   .date-head .date-lost { font-size: 9px; padding: 1px 5px; }
   .cell-name input { font-size: 12.5px; }
-  .cell-phone input { font-size: 12px; letter-spacing: 0; }
-  .cell-name input::placeholder, .cell-phone input::placeholder { font-size: 10px; }
+  .cell-name input::placeholder { font-size: 10px; }
 }
 
 /* ===== Mobile first: 좁은 화면 UI(폰트/버튼/헤더) 최적화 ===== */
@@ -695,7 +688,7 @@ html, body {
     white-space: nowrap;
     text-overflow: ellipsis;
   }
-  .cell-name input, .cell-phone input, .cell-money input { padding: clamp(5px, .9dvh, 8px) 3px; font-size: 12.5px; line-height: 1.2; }
+  .cell-name input, .cell-money input { padding: clamp(5px, .9dvh, 8px) 3px; font-size: 12.5px; line-height: 1.2; }
   .admin-cards { grid-template-columns: 1fr; }
   .asset-list { grid-template-columns: repeat(auto-fill, minmax(46%, 1fr)); }
   .storage-architecture { grid-template-columns: 1fr; }
@@ -706,13 +699,12 @@ html, body {
 }
 
 /* ===== 실제 스마트폰(≤480px): 고정열을 더 좁혀 날짜를 2~3일 보이게 =====
-   No/이름/양지번호/합계 고정폭을 최소화하고 날짜 폭도 줄여, 좁은 폰에서도
+   No/이름/평균타수 고정폭을 최소화하고 날짜 폭도 줄여, 좁은 폰에서도
    날짜가 1일만 나오지 않고 여러 날 + 접힘(···+N일)이 함께 보이도록 한다. */
 @media (max-width: 480px) {
   :root {
     --w-no: 18px;
     --w-name: 42px;    /* 회원 이름: 한글 4자 기준 */
-    --w-phone: 30px;   /* 양지번호: 최소폭 */
     --w-date: 28px;    /* 타수: 숫자 3자리 */
     --w-rank: 20px;    /* 순위: 숫자 2자리 */
     --w-total: 46px;   /* 평균타수 */
@@ -731,7 +723,6 @@ html, body {
   .date-head .date-lost { font-size: 8px; padding: 1px 3px; }
   .cell-money input { font-size: 11.5px; padding: clamp(5px, .8dvh, 7px) 1px; }
   .cell-name input { font-size: 10.5px; padding: clamp(5px, .8dvh, 7px) 1px; }
-  .cell-phone input { font-size: 10.5px; padding: clamp(5px, .8dvh, 7px) 1px; }
   .col-total, .cell-total, .foot-grand { font-size: 10px; white-space: normal !important; line-height: 1.05; }
   .average-head { gap: 2px; }
   .average-sort-btn { padding: 1px 4px; font-size: 8.5px; }

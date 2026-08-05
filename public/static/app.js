@@ -12,7 +12,7 @@
   var assetsLoaded = false;
 
   // 날짜가 많아 화면을 넘어가면 가운데 오래된 날짜 열을 자동으로 접어(숨겨)
-  // 회원이름·양지번호·최근 날짜 몇 개·평균타수가 한 화면에 보이게 함.
+  // 회원이름·평균타수·최근 날짜 몇 개가 한 화면에 보이게 함.
   var collapseEnabled = true;   // 접기 사용 여부
   var expandTimer = null;       // '초기화(펼쳐보기)' 후 자동 복귀 타이머
 
@@ -24,28 +24,41 @@
       var raw = localStorage.getItem(STORE_KEY);
       if (raw) {
         var d = JSON.parse(raw);
-        return {
-          members: (d.members && d.members.length) ? d.members : makeDefaultMembers(),
-          dates: (d.dates && d.dates.length) ? d.dates : makeDefaultDates(),
-          cells: d.cells || {},
-          manager: d.manager || { name: '', phone: '' },
-          widths: d.widths || {},
-          labels: mergeLabels(d.labels),  // 화면 문구(제목/라벨) — 관리자 수정 가능
-          extra: normalizeExtra(d.extra)  // 지출액/잔액(합계 열 아래 2개 행)
-          // assets(자료실 이미지)는 이제 서버(R2)에 저장 → localStorage에 두지 않음
-        };
+        return normalizeState(d);
       }
     } catch (e) {}
-    return {
-      members: makeDefaultMembers(),
-      dates: makeDefaultDates(),  // 골프 친 날짜 기본 3개(많아지면 접기)
-      cells: {}, manager: { name: '', phone: '' }, widths: {}, labels: mergeLabels(null),
-      extra: normalizeExtra(null)  // 지출액/잔액(합계 열 아래 2개 행)
-    };
+    return normalizeState({});
+  }
+  // 번호 필드는 과거 백업/브라우저 캐시에 남아 있어도 즉시 제거한다.
+  // 그 밖의 추가 필드(editTimes 등)는 그대로 보존해 전체 백업/복원이 손실 없이 동작한다.
+  function stripStoredNumberData(data) {
+    var out = Object.assign({}, data || {});
+    out.members = Array.isArray(out.members) ? out.members.map(function (member) {
+      var copy = Object.assign({}, member || {}); delete copy.phone; return copy;
+    }) : [];
+    if (out.manager && typeof out.manager === 'object') {
+      out.manager = Object.assign({}, out.manager); delete out.manager.phone;
+    }
+    if (out.labels && typeof out.labels === 'object') {
+      out.labels = Object.assign({}, out.labels); delete out.labels.colPhone;
+    }
+    return out;
+  }
+  function normalizeState(saved) {
+    var out = stripStoredNumberData(saved);
+    out.members = out.members.length ? out.members : makeDefaultMembers();
+    out.dates = (out.dates && out.dates.length) ? out.dates : makeDefaultDates();
+    out.cells = out.cells || {};
+    out.manager = out.manager || { name: '' };
+    out.widths = out.widths || {};
+    out.labels = mergeLabels(out.labels);
+    out.extra = normalizeExtra(out.extra);
+    return out;
   }
   // 지출액/잔액 값을 항상 {expense, balance} 숫자 형태로 정규화
   function normalizeExtra(saved) {
-    var out = { expenses: {} };
+    var out = (saved && typeof saved === 'object') ? Object.assign({}, saved) : {};
+    out.expenses = {};
     if (saved && typeof saved === 'object') {
       if (Object.prototype.hasOwnProperty.call(saved, 'total')) out.total = Number(saved.total) || 0;
       if (saved.expenses && typeof saved.expenses === 'object') {
@@ -87,14 +100,14 @@ function baseTotalAmount() {
       title: '사보회',                      // 상단 제목
       lost: '타수',                         // 날짜 칸 안 점수의 의미
       colName: '회원 이름',                // 이름 열 제목
-      colPhone: '양지번호',                // 번호 열 제목
     };
   }
   // 저장된 labels에 기본값을 덮어씌워 항상 모든 키가 존재하도록 병합
   function mergeLabels(saved) {
     var def = defaultLabels();
     if (!saved || typeof saved !== 'object') return def;
-    var out = {};
+    var out = Object.assign({}, saved);
+    delete out.colPhone;
     Object.keys(def).forEach(function (k) {
       var oldValue = (typeof saved[k] === 'string' && saved[k].trim()) ? saved[k] : '';
       if (k === 'title' && oldValue === '골프등급표') oldValue = '사보회';
@@ -108,7 +121,7 @@ function baseTotalAmount() {
   function lbl(key) { return (state.labels && state.labels[key]) || defaultLabels()[key]; }
   function makeDefaultMembers() {
     var arr = [];
-    for (var i = 0; i < DEFAULT_ROWS; i++) arr.push({ id: uid(), name: '', phone: '' });
+    for (var i = 0; i < DEFAULT_ROWS; i++) arr.push({ id: uid(), name: '' });
     return arr;
   }
   function makeDate(iso) { return { id: uid(), iso: iso }; }
@@ -124,7 +137,7 @@ function baseTotalAmount() {
     }
     return arr;
   }
-  function saveLocal() { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {} }
+  function saveLocal() { try { state = stripStoredNumberData(state); localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {} }
   // save(): 로컬에 즉시 저장 + 서버(D1)에 디바운스 저장하여 모든 기기가 공유하게 함.
   function save() { saveLocal(); scheduleServerSave(); }
   // 입력이 끝난 뒤(포커스 해제) 미뤄둔 서버 데이터를 반영한다.
@@ -149,11 +162,7 @@ function baseTotalAmount() {
   var pendingServerData = null; // 입력 중이라 반영을 미룬 서버 데이터(입력 끝나면 적용)
 
   function serializeState() {
-    return {
-      members: state.members, dates: state.dates, cells: state.cells,
-      manager: state.manager, widths: state.widths, labels: state.labels,
-      extra: state.extra || { expenses: {} }
-    };
+    return stripStoredNumberData(state);
   }
 
   function scheduleServerSave() {
@@ -228,13 +237,7 @@ function baseTotalAmount() {
   function applyServerData(d) {
     if (!d || !d.members) return;
     if (isEditing()) { pendingServerData = d; return; }
-    state.members = d.members;
-    state.dates = (d.dates && d.dates.length) ? d.dates : state.dates;
-    state.cells = d.cells || {};
-    state.manager = d.manager || state.manager || { name: '', phone: '' };
-    state.widths = d.widths || {};
-    state.labels = mergeLabels(d.labels);
-    state.extra = normalizeExtra(d.extra);  // 지출액/잔액도 서버 값으로 동기화
+    state = normalizeState(d);
     saveLocal();
     render();
     renderAdmin && renderAdmin();
@@ -407,7 +410,7 @@ function baseTotalAmount() {
   }
 
   // 좁은 화면(모바일/태블릿/가로화면 등 900px 이하)인지 판단.
-  // ★모바일에서는 사용자가 예전에 드래그로 넓혀 저장한 "모든" 컬럼 폭(이름·양지번호·
+  // ★모바일에서는 사용자가 예전에 드래그로 넓혀 저장한 "모든" 컬럼 폭(이름·
   //  날짜·합계 전부)을 무시하고 CSS의 좁은 고정폭을 강제한다. 이렇게 해야 예전에 크게
   //  늘려둔 폭이 남아 표가 화면을 넘치고(가로 스크롤) 컬럼이 잘리는 문제가 사라진다.
   function isNarrow() { return window.innerWidth <= 900; }
@@ -609,14 +612,6 @@ function baseTotalAmount() {
       }
       var m1 = findMember(t.getAttribute('data-name'));
       if (m1) { m1.name = t.value; save(); }
-    } else if (t.matches('.phone-input')) {
-      if (!isAdmin && !t.value.trim() && (t.dataset.originalValue || '').trim()) {
-        t.value = t.dataset.originalValue;
-        alert('기존 번호 삭제는 관리자만 할 수 있습니다.');
-        return;
-      }
-      var m2 = findMember(t.getAttribute('data-phone'));
-      if (m2) { m2.phone = t.value; save(); }
     }
   });
   // 잔액(자동 계산: 날짜별 합계 - 지출액)을 실시간 갱신 (표 안 tfoot 셀)
@@ -686,7 +681,7 @@ function baseTotalAmount() {
 
   body.addEventListener('focus', function (e) {
     var t = e.target;
-    if (t.matches('.name-input, .phone-input, .money-input')) t.dataset.originalValue = t.value;
+    if (t.matches('.name-input, .money-input')) t.dataset.originalValue = t.value;
     if (!t.matches('.money-input')) return;
     var num = parseNum(t.value); t.value = num ? String(num) : '';
     setTimeout(function () { try { t.select(); } catch (x) {} }, 0);
@@ -698,7 +693,7 @@ function baseTotalAmount() {
     renderBody(); applyWidths();
     setTimeout(flushPendingServerData, 50);
   }, true);
-  // 이름/전화 입력칸 등에서도 포커스 해제되면 미뤄둔 데이터 반영
+  // 이름/타수 입력칸 등에서도 포커스 해제되면 미뤄둔 데이터 반영
   body.addEventListener('focusout', function () { setTimeout(flushPendingServerData, 100); });
 
   // 표 입력칸에서 Enter → 다음 회원(아래 행)의 같은 열로 이동.
@@ -708,7 +703,6 @@ function baseTotalAmount() {
     var t = e.target;
     var kind = null, id = null;
     if (t.matches('.name-input')) { kind = 'name'; id = t.getAttribute('data-name'); }
-    else if (t.matches('.phone-input')) { kind = 'phone'; id = t.getAttribute('data-phone'); }
     else if (t.matches('.money-input')) { kind = 'money'; id = t.getAttribute('data-m'); }
     else return;
     e.preventDefault();
@@ -719,14 +713,14 @@ function baseTotalAmount() {
 
     // 마지막 행이면 회원 추가
     if (idx === state.members.length - 1) {
-      state.members.push({ id: uid(), name: '', phone: '' });
+      state.members.push({ id: uid(), name: '' });
       save(); render();
     }
     // 다음 행의 같은 종류 칸으로 포커스
     var rows = body.querySelectorAll('tr');
     var next = rows[idx + 1];
     if (!next) return;
-    var sel = kind === 'name' ? '.name-input' : kind === 'phone' ? '.phone-input' : '.money-input';
+    var sel = kind === 'name' ? '.name-input' : '.money-input';
     var el;
     if (kind === 'money') {
       // 금액은 같은 날짜(data-d) 열을 유지
@@ -814,7 +808,7 @@ function baseTotalAmount() {
     if (resizeReRenderTimer) clearTimeout(resizeReRenderTimer);
     resizeReRenderTimer = setTimeout(function () {
       var ae = document.activeElement;
-      if (ae && (ae.classList && (ae.classList.contains('name-input') || ae.classList.contains('phone-input') || ae.classList.contains('money-input')))) return;
+      if (ae && (ae.classList && (ae.classList.contains('name-input') || ae.classList.contains('money-input')))) return;
       // 폭이 바뀌면 좁은화면 판정도 달라질 수 있으므로 항상 다시 렌더
       render();
     }, 250);
@@ -868,7 +862,7 @@ function baseTotalAmount() {
 
   // ---------- 회원/날짜 추가 ----------
   document.getElementById('btn-add-member').addEventListener('click', function () {
-    state.members.push({ id: uid(), name: '', phone: '' }); save(); render();
+    state.members.push({ id: uid(), name: '' }); save(); render();
     var inputs = body.querySelectorAll('.name-input'); if (inputs.length) inputs[inputs.length - 1].focus();
   });
   // 선택한 날짜(iso: YYYY-MM-DD)를 실제로 표에 추가
@@ -968,10 +962,9 @@ function baseTotalAmount() {
     if (confirm('정산표(회원/날짜/타수)를 완전히 초기화할까요?\n※ R2 자료실 이미지는 유지됩니다.')) {
       state.members = makeDefaultMembers();
       state.dates = makeDefaultDates();
-      state.cells = {}; state.manager = { name: '', phone: '' }; state.widths = {};
+      state.cells = {}; state.manager = { name: '' }; state.widths = {};
       state.labels = defaultLabels();
       state.extra = { expenses: {} };
-      mgrName.value = ''; mgrPhone.value = '';
       collapseEnabled = true;
       save(); render();
     }
@@ -1180,7 +1173,7 @@ function baseTotalAmount() {
     loadAssetsFromServer();
   }
 
-  // ---------- 날짜 관리(금액 비우기 · 날짜 삭제) ----------
+  // ---------- 날짜 관리(타수 비우기 · 날짜 삭제) ----------
   // 특정 날짜의 금액 입력 개수(0이 아닌 셀 수)
   function dateFilledCount(id) {
     var n = 0;
@@ -1245,7 +1238,7 @@ function baseTotalAmount() {
 
   // ---------- 화면 문구(라벨) 수정 ----------
   function fillLabelInputs() {
-    var map = { 'lbl-title': 'title', 'lbl-lost': 'lost', 'lbl-name': 'colName', 'lbl-phone': 'colPhone' };
+    var map = { 'lbl-title': 'title', 'lbl-lost': 'lost', 'lbl-name': 'colName' };
     Object.keys(map).forEach(function (id) {
       var el = document.getElementById(id);
       if (el) el.value = lbl(map[id]);
@@ -1259,7 +1252,7 @@ function baseTotalAmount() {
       var get = function (id) { var e = document.getElementById(id); return e ? e.value.trim() : ''; };
       state.labels = mergeLabels({
         title: get('lbl-title'), lost: get('lbl-lost'),
-        colName: get('lbl-name'), colPhone: get('lbl-phone')
+        colName: get('lbl-name')
       });
       save(); fillLabelInputs(); render();
       alert('화면 문구를 저장했습니다.');
@@ -1391,8 +1384,8 @@ function baseTotalAmount() {
   var adminResetBtn = document.getElementById('admin-reset');
   if (adminResetBtn) adminResetBtn.addEventListener('click', fullReset);
   document.getElementById('admin-backup').addEventListener('click', function () {
-    // D1 정산 데이터(회원/날짜/타수)만 백업. 자료실 이미지는 R2에 별도 보관됨.
-    var blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+    // D1 전체 데이터(회원/날짜/타수/금액/문구/추가 필드)를 백업. 자료실 이미지는 R2에서 별도 관리.
+    var blob = new Blob([JSON.stringify(serializeState(), null, 2)], { type: 'application/json' });
     downloadBlob(blob, '골프정산_백업_' + todayIso() + '.json');
   });
   document.getElementById('admin-restore').addEventListener('change', function (e) {
@@ -1403,13 +1396,7 @@ function baseTotalAmount() {
       try {
         var d = JSON.parse(reader.result);
         if (!d || !d.members) throw new Error('형식오류');
-        state = {
-          members: d.members || makeDefaultMembers(),
-          dates: (d.dates && d.dates.length) ? d.dates : makeDefaultDates(),
-          cells: d.cells || {}, manager: d.manager || { name: '', phone: '' },
-          widths: d.widths || {}, labels: mergeLabels(d.labels), extra: normalizeExtra(d.extra)
-          // 자료실 이미지는 서버(R2)에 있으므로 복원 대상이 아님
-        };
+        state = normalizeState(d);
         save();
         render(); renderAdmin();
         alert('정산 데이터를 복원했습니다. (자료실 이미지는 서버에 그대로 유지됩니다)');

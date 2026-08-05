@@ -20,11 +20,35 @@ type AdminTokenPayload = { sub: 'admin'; iat: number; exp: number; nonce: string
 type LoginAttempt = { count: number; windowStart: number }
 type AppStateRow = { rev: number; data_json: string | null }
 type SheetData = {
-  members: Array<{ id: string; name?: string; phone?: string }>;
+  members: Array<{ id: string; name?: string; [key: string]: unknown }>;
   dates: Array<{ id: string; iso?: string }>;
   cells?: Record<string, unknown>;
   labels?: unknown;
   [key: string]: unknown;
+}
+
+// 이전 버전이 전송한 번호 필드도 저장하거나 다시 노출하지 않는다.
+// 그 밖의 알 수 없는 필드는 그대로 복사해 백업/복원 호환성을 유지한다.
+function stripStoredNumberData(data: SheetData): SheetData {
+  const cleaned: SheetData = {
+    ...data,
+    members: data.members.map((member) => {
+      const copy = { ...member }
+      delete copy.phone
+      return copy
+    })
+  }
+  if (cleaned.manager && typeof cleaned.manager === 'object' && !Array.isArray(cleaned.manager)) {
+    const manager = { ...(cleaned.manager as Record<string, unknown>) }
+    delete manager.phone
+    cleaned.manager = manager
+  }
+  if (cleaned.labels && typeof cleaned.labels === 'object' && !Array.isArray(cleaned.labels)) {
+    const labels = { ...(cleaned.labels as Record<string, unknown>) }
+    delete labels.colPhone
+    cleaned.labels = labels
+  }
+  return cleaned
 }
 
 function errorMessage(error: unknown): string {
@@ -163,8 +187,7 @@ function isSheetData(value: unknown): value is SheetData {
   const dateIds = new Set(data.dates.map((date) => date.id))
   if (memberIds.size !== data.members.length || dateIds.size !== data.dates.length) return false
   if (!data.members.every((member) =>
-    (member.name === undefined || (typeof member.name === 'string' && member.name.length <= 24)) &&
-    (member.phone === undefined || (typeof member.phone === 'string' && member.phone.length <= 24))
+    member.name === undefined || (typeof member.name === 'string' && member.name.length <= 24)
   )) return false
   if (!data.dates.every((date) => date.iso === undefined || (typeof date.iso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date.iso)))) return false
   if (data.cells) {
@@ -212,7 +235,6 @@ function requiresAdminForSheetChange(current: SheetData | null, next: SheetData)
     const nextMember = next.members.find((candidate) => candidate.id === member.id)
     if (!nextMember) return true
     if (isMeaningfulValue(member.name) && !isMeaningfulValue(nextMember.name)) return true
-    if (isMeaningfulValue(member.phone) && !isMeaningfulValue(nextMember.phone)) return true
   }
   if (removesMapValue(current.cells, next.cells)) return true
   if (removesNestedValue(current.extra, next.extra)) return true
@@ -225,7 +247,7 @@ async function readD1Sheet(c: Context<AppEnv>): Promise<{ rev: number; data: She
   if (row?.data_json) {
     try {
       const parsed = JSON.parse(row.data_json) as unknown
-      if (isSheetData(parsed)) return { rev: Number(row.rev) || 0, data: parsed }
+      if (isSheetData(parsed)) return { rev: Number(row.rev) || 0, data: stripStoredNumberData(parsed) }
     } catch (error) {
       logError('D1 app state parse failed', error, c.req.path)
     }
@@ -239,12 +261,13 @@ async function readD1Sheet(c: Context<AppEnv>): Promise<{ rev: number; data: She
     if (!isSheetData(parsed)) return { rev: Number(row?.rev) || 0, data: null }
     const metadata = legacy.customMetadata || {}
     const legacyRev = Math.max(1, Number(metadata.rev) || 1)
+    const cleaned = stripStoredNumberData(parsed)
     await c.env.DB.prepare(
       `INSERT INTO app_state (id, rev, data_json, updated_at) VALUES (1, ?, ?, CURRENT_TIMESTAMP)
        ON CONFLICT(id) DO UPDATE SET rev = excluded.rev, data_json = excluded.data_json, updated_at = CURRENT_TIMESTAMP`
-    ).bind(legacyRev, JSON.stringify(parsed)).run()
+    ).bind(legacyRev, JSON.stringify(cleaned)).run()
     await recordAdminAudit(c, 'legacy_r2_to_d1', 'app_state', '1', { rev: legacyRev })
-    return { rev: legacyRev, data: parsed }
+    return { rev: legacyRev, data: cleaned }
   } catch (error) {
     logError('legacy R2 sheet migration failed', error, c.req.path)
     return { rev: Number(row?.rev) || 0, data: null }
@@ -427,19 +450,20 @@ app.put('/api/sheet', async (c) => {
     if (!body || !isSheetData(body.data)) {
       return c.json({ ok: false, error: 'bad request' }, 400);
     }
+    const cleanedData = stripStoredNumberData(body.data)
     const current = await readD1Sheet(c)
     const curRev = current.rev
     // 낙관적 동시성: baseRev 가 제시됐고 서버 rev 와 다르면 충돌
     if (typeof body.baseRev === 'number' && body.baseRev !== curRev) {
       return c.json({ ok: false, conflict: true, rev: curRev, data: current.data }, 409);
     }
-    const needsAdmin = requiresAdminForSheetChange(current.data, body.data)
+    const needsAdmin = requiresAdminForSheetChange(current.data, cleanedData)
     const isAuthorizedAdmin = needsAdmin ? await verifyAdminRequest(c) : false
     if (needsAdmin && !isAuthorizedAdmin) {
       return c.json({ ok: false, error: 'admin authorization required' }, 403);
     }
     const newRev = curRev + 1;
-    const payload = JSON.stringify(body.data);
+    const payload = JSON.stringify(cleanedData);
     const result = await c.env.DB.prepare(
       'UPDATE app_state SET rev = ?, data_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1 AND rev = ?'
     ).bind(newRev, payload, curRev).run()
@@ -465,7 +489,7 @@ app.get('/', (c) => {
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⛳</text></svg>">
   <title>사보회</title>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
-  <link href="/static/style.css?v=20260805g1" rel="stylesheet">
+  <link href="/static/style.css?v=20260805h1" rel="stylesheet">
 </head>
 <body>
   <header class="app-header" id="app-header">
@@ -505,7 +529,7 @@ app.get('/', (c) => {
           <button id="btn-logout" class="btn btn-red"><i class="fas fa-right-from-bracket"></i> 로그아웃</button>
         </div>
       </div>
-      <p class="admin-note"><i class="fas fa-circle-info"></i> 관리자 모드에서는 회원·타수·날짜·문구·이미지를 모두 관리하고 <b>삭제</b>할 수 있습니다. 일반 사용자는 기존 데이터를 삭제할 수 없습니다.</p>
+      <p class="admin-note"><i class="fas fa-circle-info"></i> 관리자 모드에서는 회원·날짜·타수·금액·문구의 <b>전체 데이터</b>와 자료실 <b>이미지</b>를 관리하고 삭제할 수 있습니다. 일반 사용자는 기존 데이터를 삭제할 수 없습니다.</p>
 
       <div class="admin-cards">
         <div class="admin-card storage-card">
@@ -535,7 +559,6 @@ app.get('/', (c) => {
             <label class="lbl-row"><span>상단 제목</span><input id="lbl-title" type="text" maxlength="24" placeholder="사보회" /></label>
             <label class="lbl-row"><span>날짜칸 의미</span><input id="lbl-lost" type="text" maxlength="12" placeholder="타수" /></label>
             <label class="lbl-row"><span>이름 열 제목</span><input id="lbl-name" type="text" maxlength="12" placeholder="회원 이름" /></label>
-            <label class="lbl-row"><span>번호 열 제목</span><input id="lbl-phone" type="text" maxlength="12" placeholder="양지번호" /></label>
 
           </div>
           <div class="admin-btns">
@@ -609,7 +632,7 @@ app.get('/', (c) => {
     </div>
   </div>
 
-  <script src="/static/app.js?v=20260805g1"></script>
+  <script src="/static/app.js?v=20260805h1"></script>
 </body>
 </html>`)
 })
