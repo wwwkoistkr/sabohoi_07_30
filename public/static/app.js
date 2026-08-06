@@ -227,10 +227,10 @@ function baseTotalAmount() {
   function queueExtraEdit(key, value, notify, editedAt) {
     pendingExtraEdits[key] = { value: Number(value) || 0, seq: ++extraEditSequence, notify: !!notify, editedAt: Number(editedAt) || 0 };
   }
-  function queueExpenseEdit(dateId, value, previous) {
+  function queueExpenseEdit(dateId, value, previous, notify) {
     var editTimes = expenseEditTimes();
     var firstEditedAt = Number(editTimes[dateId]) || (previous ? 0 : Date.now());
-    queueExtraEdit('expense|' + dateId, value, true, firstEditedAt);
+    queueExtraEdit('expense|' + dateId, value, notify !== false, firstEditedAt);
     if (value && firstEditedAt) editTimes[dateId] = firstEditedAt; else delete editTimes[dateId];
   }
   function snapshotPendingExtraEdits() {
@@ -597,6 +597,12 @@ function baseTotalAmount() {
   //  날짜·합계 전부)을 무시하고 CSS의 좁은 고정폭을 강제한다. 이렇게 해야 예전에 크게
   //  늘려둔 폭이 남아 표가 화면을 넘치고(가로 스크롤) 컬럼이 잘리는 문제가 사라진다.
   function isNarrow() { return window.innerWidth <= 900; }
+  function usesNativeMobileNumberInput() { return window.innerWidth <= 640; }
+  function mobileNumberAttributes(maxLength) {
+    return usesNativeMobileNumberInput()
+      ? ' inputmode="numeric" pattern="[0-9]*" enterkeyhint="done" autocomplete="off" maxlength="' + maxLength + '"'
+      : ' inputmode="none" readonly maxlength="' + maxLength + '"';
+  }
   // 좁은 화면에서 저장 드래그 폭을 무시할지 여부 — 이제 모든 컬럼에 적용한다.
   function forceCss(key) { return isNarrow(); }
 
@@ -689,7 +695,7 @@ function baseTotalAmount() {
       if (_vd.hiddenCount > 0) h += '<td class="cell-fold" title="숨겨진 날짜"></td>';
       _vd.visible.forEach(function (d) {
         var val = state.cells[cellKey(m.id, d.id)];
-        h += '<td class="cell-money" data-col="date:' + d.id + '"' + wStyle('date:' + d.id) + '><input type="tel" inputmode="numeric" pattern="[0-9]*" enterkeyhint="next" autocomplete="off" maxlength="3" data-m="' + m.id + '" data-d="' + d.id + '" class="' + inputCls('money-input', !!val) + (val ? ' has-val' : '') + '" value="' + (val ? fmt(val) : '') + '" placeholder="0" aria-label="' + escapeHtml((m.name || '회원') + ' ' + fmtDateFull(d.iso) + ' 타수 입력') + '" /></td>';
+        h += '<td class="cell-money" data-col="date:' + d.id + '"' + wStyle('date:' + d.id) + '><input type="text"' + mobileNumberAttributes(3) + ' data-m="' + m.id + '" data-d="' + d.id + '" class="' + inputCls('money-input', !!val) + (val ? ' has-val' : '') + '" value="' + (val ? fmt(val) : '') + '" placeholder="0" aria-label="' + escapeHtml((m.name || '회원') + ' ' + fmtDateFull(d.iso) + ' 타수 입력') + '" /></td>';
         h += '<td class="cell-rank" data-rank-member="' + m.id + '" data-rank-date="' + d.id + '">' + (rankFor(m.id, d.id) || '') + '</td>';
       });
       h += '</tr>';
@@ -715,7 +721,7 @@ function baseTotalAmount() {
     if (_vd.hiddenCount > 0) h += '<td class="foot-extra-filler"></td>';
     _vd.visible.forEach(function (d) {
       var ex = expenseFor(d.id);
-      h += '<td colspan="2" class="foot-extra-cell foot-date-value"><input type="tel" inputmode="numeric" pattern="[0-9]*" enterkeyhint="done" autocomplete="off" maxlength="9" class="extra-input' + (ex ? ' has-val' : '') + '" data-expense-date="' + d.id + '" value="' + (ex ? fmt(ex) : '') + '" placeholder="0" aria-label="' + escapeHtml(fmtDateFull(d.iso) + ' 날짜별 지출 입력') + '" /></td>';
+      h += '<td colspan="2" class="foot-extra-cell foot-date-value"><input type="text"' + mobileNumberAttributes(9) + ' class="extra-input' + (ex ? ' has-val' : '') + '" data-expense-date="' + d.id + '" value="' + (ex ? fmt(ex) : '') + '" placeholder="0" aria-label="' + escapeHtml(fmtDateFull(d.iso) + ' 날짜별 지출 입력') + '" /></td>';
     });
     h += '</tr>';
 
@@ -779,9 +785,18 @@ function baseTotalAmount() {
     if (tableWrap) tableWrap.scrollTop = 0;
   });
   // ---------- 입력 ----------
-  // 타수는 빠른 숫자판의 완료 버튼에서만 저장하고, 여기서는 회원 이름만 처리한다.
+  // 회원 이름은 즉시 저장하고, 모바일 타수 입력은 숫자 키보드 값을 완료 전 초안으로 유지한다.
   body.addEventListener('input', function (e) {
     var t = e.target;
+    if (t.matches('.money-input') && usesNativeMobileNumberInput()) {
+      var digits = String(t.value || '').replace(/[^0-9]/g, '').slice(0, 3);
+      if ((Number(digits) || 0) > MAX_SCORE) digits = String(MAX_SCORE);
+      qpTarget = t;
+      qpDraft = digits;
+      qpReplaceOnNextDigit = false;
+      updateQuickPreview();
+      return;
+    }
     if (t.matches('.name-input')) {
       if (!isAdmin && !t.value.trim() && (t.dataset.originalValue || '').trim()) {
         t.value = t.dataset.originalValue;
@@ -790,22 +805,6 @@ function baseTotalAmount() {
       }
       var m1 = findMember(t.getAttribute('data-name'));
       if (m1) { m1.name = t.value; save(); }
-      return;
-    }
-    if (t.matches('.money-input')) {
-      var key = cellKey(t.getAttribute('data-m'), t.getAttribute('data-d'));
-      var previous = Number(state.cells[key]) || 0;
-      var digits = String(t.value || '').replace(/[^0-9]/g, '').slice(0, 3);
-      var value = Math.min(MAX_SCORE, Math.max(0, Number(digits) || 0));
-      t.value = digits;
-      t.classList.toggle('has-val', !!value);
-      if (value !== previous) {
-        if (value) state.cells[key] = value; else delete state.cells[key];
-        queueCellEdit(key, value, previous);
-        saveLocal();
-        scheduleServerSave();
-        refreshTotals();
-      }
     }
   });
   // 잔액(자동 계산: 총액 - 각 날짜의 지출)을 실시간 갱신 (표 안 tfoot 셀)
@@ -832,6 +831,7 @@ function baseTotalAmount() {
   var expenseTarget = null;
   var expenseDraft = '';
   var expenseReplaceOnNextDigit = true;
+  var expenseDraftSaveTimer = null;
 
   function savedExpenseValue(t) {
     return t ? expenseFor(t.getAttribute('data-expense-date')) : 0;
@@ -871,6 +871,12 @@ function baseTotalAmount() {
     expenseReplaceOnNextDigit = true;
     var date = findDate(t.getAttribute('data-expense-date'));
     expenseQuickLabel.textContent = (date ? fmtDateFull(date.iso) : '날짜') + ' · 지출';
+    if (usesNativeMobileNumberInput()) {
+      expensePad.classList.add('hidden');
+      updateExpenseQuickPreview();
+      setTimeout(function () { try { t.select(); } catch (x) {} }, 0);
+      return;
+    }
     expensePad.classList.remove('hidden');
     keepExpenseTargetVisible(t);
     positionExpenseQuickPad(t);
@@ -896,6 +902,7 @@ function baseTotalAmount() {
     updateExpenseQuickPreview();
   }
   function closeExpenseQuickPad(committed) {
+    if (expenseDraftSaveTimer) { clearTimeout(expenseDraftSaveTimer); expenseDraftSaveTimer = null; }
     if (expenseTarget && !committed) {
       var original = savedExpenseValue(expenseTarget);
       expenseTarget.value = original ? fmt(original) : '';
@@ -911,8 +918,8 @@ function baseTotalAmount() {
     var editedAt = Number(expenseEditTimes()[dateId]) || 0;
     return !editedAt || Date.now() - editedAt >= (24 * 60 * 60 * 1000);
   }
-  function completeExpenseQuickPad() {
-    if (!expenseTarget) return;
+  function commitExpenseDraftToState(notify) {
+    if (!expenseTarget) return false;
     var target = expenseTarget;
     var dateId = target.getAttribute('data-expense-date');
     var previous = savedExpenseValue(target);
@@ -922,7 +929,7 @@ function baseTotalAmount() {
       expenseDraft = String(previous);
       expenseReplaceOnNextDigit = true;
       updateExpenseQuickPreview();
-      return;
+      return false;
     }
     if (value !== previous) {
       if (!state.extra) state.extra = { expenses: {} };
@@ -931,16 +938,32 @@ function baseTotalAmount() {
       var wasLegacyValue = latest && latest.id === dateId && !Object.prototype.hasOwnProperty.call(state.extra.expenses, dateId) && Number(state.extra.legacyExpense);
       if (value) state.extra.expenses[dateId] = value; else delete state.extra.expenses[dateId];
       if (wasLegacyValue) delete state.extra.legacyExpense;
-      queueExpenseEdit(dateId, value, previous);
+      queueExpenseEdit(dateId, value, previous, notify);
       saveLocal();
       scheduleServerSave();
-    } else {
+    } else if (notify) {
       showInputToast('입력되었습니다');
     }
-    closeExpenseQuickPad(true);
     target.value = value ? fmt(value) : '';
     target.classList.toggle('has-val', !!value);
     refreshBalance();
+    return true;
+  }
+  function scheduleExpenseDraftServerSave() {
+    if (expenseDraftSaveTimer) clearTimeout(expenseDraftSaveTimer);
+    expenseDraftSaveTimer = setTimeout(function () {
+      expenseDraftSaveTimer = null;
+      commitExpenseDraftToState(false);
+    }, 650);
+  }
+  function completeExpenseQuickPad() {
+    if (!expenseTarget) return;
+    var target = expenseTarget;
+    if (!commitExpenseDraftToState(true)) return;
+    var value = savedExpenseValue(target);
+    closeExpenseQuickPad(true);
+    target.value = value ? fmt(value) : '';
+    target.classList.toggle('has-val', !!value);
   }
 
   expensePad.addEventListener('mousedown', function (e) { e.preventDefault(); });
@@ -961,9 +984,7 @@ function baseTotalAmount() {
     var t = e.target; if (!t.matches('.extra-input')) return;
     t.dataset.originalValue = t.value;
     if (t.hasAttribute('data-expense-date')) {
-      var current = savedExpenseValue(t);
-      t.value = current ? String(current) : '';
-      try { t.select(); } catch (x) {}
+      openExpenseQuickPad(t);
       return;
     }
     if (!isAdmin) return;
@@ -972,21 +993,10 @@ function baseTotalAmount() {
   foot.addEventListener('input', function (e) {
     var t = e.target; if (!t.matches('.extra-input')) return;
     if (t.hasAttribute('data-expense-date')) {
-      var dateId = t.getAttribute('data-expense-date');
-      var previous = savedExpenseValue(t);
-      var digits = String(t.value || '').replace(/[^0-9]/g, '').slice(0, 9);
-      var value = Math.max(0, Number(digits) || 0);
-      t.value = digits;
-      t.classList.toggle('has-val', !!value);
-      if (value && value !== previous) {
-        if (!state.extra) state.extra = { expenses: {} };
-        if (!state.extra.expenses) state.extra.expenses = {};
-        state.extra.expenses[dateId] = value;
-        queueExpenseEdit(dateId, value, previous);
-        saveLocal();
-        scheduleServerSave();
-        refreshBalance();
-      }
+      expenseDraft = String(t.value || '').replace(/[^0-9]/g, '').slice(0, 9);
+      expenseReplaceOnNextDigit = false;
+      updateExpenseQuickPreview();
+      scheduleExpenseDraftServerSave();
       return;
     }
     if (!isAdmin) return;
@@ -1010,15 +1020,29 @@ function baseTotalAmount() {
   });
   foot.addEventListener('keydown', function (e) {
     var t = e.target; if (!t.matches('[data-expense-date]')) return;
-    if (e.key === 'Enter') { e.preventDefault(); t.blur(); }
+    if (usesNativeMobileNumberInput()) {
+      if (e.key === 'Enter') { e.preventDefault(); completeExpenseQuickPad(); t.blur(); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeExpenseQuickPad(false); t.blur(); }
+      return;
+    }
+    if (/^[0-9]$/.test(e.key)) { e.preventDefault(); enterExpenseDigit(e.key); }
+    else if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); clearExpenseDraft(); }
+    else if (e.key === 'Enter') { e.preventDefault(); completeExpenseQuickPad(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeExpenseQuickPad(false); }
   });
   foot.addEventListener('blur', function (e) {
     var t = e.target; if (!t.matches('.extra-input')) return;
     if (t.hasAttribute('data-expense-date')) {
-      var saved = savedExpenseValue(t);
-      t.value = saved ? fmt(saved) : '';
-      t.classList.toggle('has-val', !!saved);
-      setTimeout(flushPendingServerData, 50);
+      if (usesNativeMobileNumberInput() && expenseTarget === t) {
+        if (commitExpenseDraftToState(false)) closeExpenseQuickPad(true);
+        else closeExpenseQuickPad(false);
+        t.value = savedExpenseValue(t) ? fmt(savedExpenseValue(t)) : '';
+        setTimeout(flushPendingServerData, 50);
+        return;
+      }
+      setTimeout(function () {
+        if (expenseTarget === t && document.activeElement !== t) closeExpenseQuickPad(false);
+      }, 0);
       return;
     }
     if (!isAdmin) return;
@@ -1039,10 +1063,24 @@ function baseTotalAmount() {
     if (t.matches('.name-input, .money-input')) t.dataset.originalValue = t.value;
     if (!t.matches('.money-input')) return;
     var num = parseNum(t.value); t.value = num ? String(num) : '';
-    try { t.select(); } catch (x) {} // 자주 쓰는 타수 빠른입력 도우미 표시
+    setTimeout(function () { try { t.select(); } catch (x) {} }, 0);
+    openQuickPad(t); // 자주 쓰는 타수 빠른입력 도우미 표시
   }, true);
   body.addEventListener('blur', function (e) {
     var t = e.target; if (!t.matches('.money-input')) return;
+    if (usesNativeMobileNumberInput() && qpTarget === t) {
+      var previous = savedQuickValue(t);
+      var draftValue = Math.min(MAX_SCORE, Math.max(0, parseNum(qpDraft)));
+      if (draftValue !== previous) {
+        completeQuickPad();
+        if (qpTarget === t) closeQuickPad(false);
+      } else {
+        closeQuickPad(true);
+        t.value = previous ? fmt(previous) : '';
+      }
+      setTimeout(flushPendingServerData, 50);
+      return;
+    }
     var num = parseNum(t.value); t.value = num ? fmt(num) : '';
     renderBody(); applyWidths();
     setTimeout(flushPendingServerData, 50);
@@ -1054,7 +1092,15 @@ function baseTotalAmount() {
   body.addEventListener('keydown', function (e) {
     var t = e.target;
     if (t.matches('.money-input')) {
-      if (e.key === 'Enter') { e.preventDefault(); t.blur(); }
+      if (usesNativeMobileNumberInput()) {
+        if (e.key === 'Enter') { e.preventDefault(); completeQuickPad(); t.blur(); }
+        else if (e.key === 'Escape') { e.preventDefault(); closeQuickPad(false); t.blur(); }
+        return;
+      }
+      if (/^[0-9]$/.test(e.key)) { e.preventDefault(); enterQuickDigit(e.key); }
+      else if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); clearQuickDraft(); }
+      else if (e.key === 'Enter') { e.preventDefault(); completeQuickPad(); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeQuickPad(false); }
       return;
     }
     if (e.key !== 'Enter' || !t.matches('.name-input')) return;
@@ -1116,6 +1162,11 @@ function baseTotalAmount() {
     var member = findMember(t.getAttribute('data-m'));
     var date = findDate(t.getAttribute('data-d'));
     quickLabel.textContent = ((member && member.name) || '이름 없음') + ' · ' + (date ? fmtDateFull(date.iso) : '날짜');
+    if (usesNativeMobileNumberInput()) {
+      quickPad.classList.add('hidden');
+      updateQuickPreview();
+      return;
+    }
     quickPad.classList.remove('hidden');
     keepTargetVisibleBesidePad(t);
     positionQuickPad(t);

@@ -277,12 +277,13 @@ function changesExpiredScore(current: SheetData, next: SheetData, now = Date.now
 function changesExpiredExpense(current: SheetData, next: SheetData, now = Date.now()): boolean {
   const currentExpenses = effectiveExpenses(current)
   const nextExpenses = effectiveExpenses(next)
+  const editTimes = expenseEditTimes(current.editTimes)
   const keys = new Set([...Object.keys(currentExpenses), ...Object.keys(nextExpenses)])
   return [...keys].some((dateId) => {
     if (currentExpenses[dateId] === nextExpenses[dateId]) return false
-    // Any member may enter or update an expense regardless of date.
-    // Removing an existing operating value remains admin-only.
-    return isMeaningfulValue(currentExpenses[dateId]) && !isMeaningfulValue(nextExpenses[dateId])
+    if (!isMeaningfulValue(currentExpenses[dateId])) return false
+    const editedAt = Number(editTimes[dateId])
+    return !Number.isFinite(editedAt) || editedAt <= 0 || now - editedAt >= SCORE_EDIT_WINDOW_MS
   })
 }
 
@@ -612,7 +613,7 @@ app.get('/', (c) => {
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⛳</text></svg>">
   <title>사보회</title>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
-  <link href="/static/style.css?v=20260806g2" rel="stylesheet">
+  <link href="/static/style.css?v=20260806h1" rel="stylesheet">
 </head>
 <body>
   <header class="app-header" id="app-header">
@@ -774,7 +775,7 @@ app.get('/', (c) => {
     </div>
   </div>
 
-  <script src="/static/app.js?v=20260806g2"></script>
+  <script src="/static/app.js?v=20260806h1"></script>
 </body>
 </html>`)
 })
