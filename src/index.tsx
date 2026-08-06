@@ -24,7 +24,7 @@ type SheetData = {
   members: Array<{ id: string; name?: string; [key: string]: unknown }>;
   dates: Array<{ id: string; iso?: string }>;
   cells?: Record<string, unknown>;
-  editTimes?: Record<string, unknown>;
+  editTimes?: unknown;
   labels?: unknown;
   [key: string]: unknown;
 }
@@ -201,11 +201,20 @@ function isSheetData(value: unknown): value is SheetData {
       if (typeof score !== 'number' || !Number.isInteger(score) || score < 1 || score > 999) return false
     }
   }
-  if (data.editTimes) {
-    if (typeof data.editTimes !== 'object' || Array.isArray(data.editTimes) || Object.keys(data.editTimes).length > 100000) return false
-    for (const editedAt of Object.values(data.editTimes)) {
-      if (typeof editedAt !== 'number' || !Number.isFinite(editedAt) || editedAt < 0) return false
+  if (data.editTimes !== undefined) {
+    if (!data.editTimes || typeof data.editTimes !== 'object' || Array.isArray(data.editTimes)) return false
+    const editRoot = data.editTimes as Record<string, unknown>
+    const validateTimes = (times: unknown): boolean => {
+      if (times === undefined) return true
+      if (!times || typeof times !== 'object' || Array.isArray(times) || Object.keys(times).length > 100000) return false
+      return Object.values(times as Record<string, unknown>).every((editedAt) =>
+        typeof editedAt === 'number' && Number.isFinite(editedAt) && editedAt >= 0
+      )
     }
+    const isNested = Object.prototype.hasOwnProperty.call(editRoot, 'cells') || Object.prototype.hasOwnProperty.call(editRoot, 'names')
+    if (isNested) {
+      if (!validateTimes(editRoot.cells) || !validateTimes(editRoot.names)) return false
+    } else if (!validateTimes(editRoot)) return false
   }
   return true
 }
@@ -230,10 +239,16 @@ function recordValue(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
+function cellEditTimes(value: unknown): Record<string, unknown> {
+  const root = recordValue(value)
+  const isNested = Object.prototype.hasOwnProperty.call(root, 'cells') || Object.prototype.hasOwnProperty.call(root, 'names')
+  return isNested ? recordValue(root.cells) : root
+}
+
 function changesExpiredScore(current: SheetData, next: SheetData, now = Date.now()): boolean {
   const currentCells = recordValue(current.cells)
   const nextCells = recordValue(next.cells)
-  const editTimes = recordValue(current.editTimes)
+  const editTimes = cellEditTimes(current.editTimes)
   return Object.keys(currentCells).some((key) => {
     if (!isMeaningfulValue(currentCells[key]) || currentCells[key] === nextCells[key]) return false
     const editedAt = Number(editTimes[key])
@@ -244,8 +259,14 @@ function changesExpiredScore(current: SheetData, next: SheetData, now = Date.now
 function stampCellEditTimes(current: SheetData | null, next: SheetData, now = Date.now()): SheetData {
   const currentCells = recordValue(current?.cells)
   const nextCells = recordValue(next.cells)
-  const currentTimes = recordValue(current?.editTimes)
-  const stampedTimes = { ...recordValue(next.editTimes) }
+  const currentEditRoot = recordValue(current?.editTimes)
+  const nextEditRoot = recordValue(next.editTimes)
+  const usesNestedTimes = Object.prototype.hasOwnProperty.call(currentEditRoot, 'cells') ||
+    Object.prototype.hasOwnProperty.call(currentEditRoot, 'names') ||
+    Object.prototype.hasOwnProperty.call(nextEditRoot, 'cells') ||
+    Object.prototype.hasOwnProperty.call(nextEditRoot, 'names')
+  const currentTimes = usesNestedTimes ? recordValue(currentEditRoot.cells) : currentEditRoot
+  const stampedTimes = { ...(usesNestedTimes ? recordValue(nextEditRoot.cells) : nextEditRoot) }
   const keys = new Set([...Object.keys(currentCells), ...Object.keys(nextCells)])
   keys.forEach((key) => {
     if (!isMeaningfulValue(nextCells[key])) {
@@ -261,7 +282,8 @@ function stampCellEditTimes(current: SheetData | null, next: SheetData, now = Da
       stampedTimes[key] = now
     }
   })
-  return { ...next, editTimes: stampedTimes }
+  const editTimes = usesNestedTimes ? { ...nextEditRoot, cells: stampedTimes } : stampedTimes
+  return { ...next, editTimes }
 }
 function requiresAdminForSheetChange(current: SheetData | null, next: SheetData): boolean {
   if (!current) return false
@@ -690,7 +712,7 @@ app.get('/', (c) => {
     </div>
   </div>
 
-  <script src="/static/app.js?v=20260806c1"></script>
+  <script src="/static/app.js?v=20260806d1"></script>
 </body>
 </html>`)
 })

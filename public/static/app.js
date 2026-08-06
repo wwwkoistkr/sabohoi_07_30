@@ -169,11 +169,21 @@ function baseTotalAmount() {
   function serializeState() {
     return stripStoredNumberData(state);
   }
-  function queueCellEdit(key, value, previous) {
-    state.editTimes = state.editTimes || {};
-    var firstEditedAt = Number(state.editTimes[key]) || (previous ? 0 : Date.now());
+  function scoreEditTimes() {
+    var root = (state.editTimes && typeof state.editTimes === 'object') ? state.editTimes : {};
+    var nested = Object.prototype.hasOwnProperty.call(root, 'cells') || Object.prototype.hasOwnProperty.call(root, 'names');
+    if (nested) {
+      root.cells = (root.cells && typeof root.cells === 'object') ? root.cells : {};
+      state.editTimes = root;
+      return root.cells;
+    }
+    state.editTimes = { cells: Object.assign({}, root) };
+    return state.editTimes.cells;
+  }  function queueCellEdit(key, value, previous) {
+    var editTimes = scoreEditTimes();
+    var firstEditedAt = Number(editTimes[key]) || (previous ? 0 : Date.now());
     pendingCellEdits[key] = { value: value, seq: ++cellEditSequence, editedAt: firstEditedAt };
-    if (value && firstEditedAt) state.editTimes[key] = firstEditedAt; else delete state.editTimes[key];
+    if (value && firstEditedAt) editTimes[key] = firstEditedAt; else delete editTimes[key];
   }
   function snapshotPendingCellEdits() {
     var copy = {};
@@ -181,16 +191,16 @@ function baseTotalAmount() {
     return copy;
   }
   function replayPendingCellEdits() {
-    state.editTimes = state.editTimes || {};
+    var editTimes = scoreEditTimes();
     Object.keys(pendingCellEdits).forEach(function (key) {
       var edit = pendingCellEdits[key];
       var value = Number(edit.value) || 0;
       if (value) {
         state.cells[key] = value;
-        if (edit.editedAt) state.editTimes[key] = edit.editedAt; else delete state.editTimes[key];
+        if (edit.editedAt) editTimes[key] = edit.editedAt; else delete editTimes[key];
       } else {
         delete state.cells[key];
-        delete state.editTimes[key];
+        delete editTimes[key];
       }
     });
   }
@@ -1077,7 +1087,7 @@ function baseTotalAmount() {
 
   function scoreEditExpiredForUser(key, previous) {
     if (isAdmin || !previous) return false;
-    var editedAt = Number(state.editTimes && state.editTimes[key]) || 0;
+    var editedAt = Number(scoreEditTimes()[key]) || 0;
     return !editedAt || Date.now() - editedAt >= (24 * 60 * 60 * 1000);
   }
   function completeQuickPad() {
