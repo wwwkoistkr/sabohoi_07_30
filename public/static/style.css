@@ -645,7 +645,25 @@ button, input, select, textarea {
 
 /* ===== Mobile first: 좁은 화면 UI(폰트/버튼/헤더) 최적화 ===== */
 @media (max-width: 640px) {
-  /* 모바일 헤더: 표가 길어도 헤더는 가로 스크롤하지 않고 화면폭에 고정.
+  :root {
+    --w-name: 52px;
+    --w-total: 50px;
+    --w-date: 34px;
+    --w-rank: 24px;
+  }
+  #quick-pad, #expense-quick-pad { display: none !important; }
+  .col-name, .cell-name {
+    width: var(--w-name) !important; min-width: var(--w-name) !important; max-width: var(--w-name) !important;
+  }
+  .col-total, .cell-total, .foot-average {
+    width: var(--w-total) !important; min-width: var(--w-total) !important; max-width: var(--w-total) !important;
+  }
+  .col-date, .cell-money {
+    width: var(--w-date) !important; min-width: var(--w-date) !important; max-width: var(--w-date) !important;
+  }
+  .col-rank, .cell-rank {
+    width: var(--w-rank) !important; min-width: var(--w-rank) !important; max-width: var(--w-rank) !important;
+  }  /* 모바일 헤더: 표가 길어도 헤더는 가로 스크롤하지 않고 화면폭에 고정.
      제목줄 + 버튼줄 2단으로 나눠 5개 버튼이 한 화면에 꽉 차게 배치. */
   .app-header { padding: 0; overflow-x: hidden; }
   .app-header-inner {
@@ -725,9 +743,9 @@ button, input, select, textarea {
   .qp-btn { min-height: 39px; padding: 6px 1px; }
   :root {
     --w-no: 18px;
-    --w-name: 42px;    /* 회원 이름: 한글 4자 기준 */
-    --w-date: 28px;    /* 타수: 숫자 3자리 */
-    --w-rank: 20px;    /* 순위: 숫자 2자리 */
+    --w-name: 48px;    /* 회원 이름: 한글 4자 기준 */
+    --w-date: 30px;    /* 타수: 숫자 3자리 */
+    --w-rank: 21px;    /* 순위: 숫자 2자리 */
     --w-total: 46px;   /* 평균타수 */
   }
   .sheet thead th { padding: 8px 1px; font-size: clamp(10px, 2.9vw, 10.8px); }

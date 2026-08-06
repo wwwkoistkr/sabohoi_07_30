@@ -689,7 +689,7 @@ function baseTotalAmount() {
       if (_vd.hiddenCount > 0) h += '<td class="cell-fold" title="숨겨진 날짜"></td>';
       _vd.visible.forEach(function (d) {
         var val = state.cells[cellKey(m.id, d.id)];
-        h += '<td class="cell-money" data-col="date:' + d.id + '"' + wStyle('date:' + d.id) + '><input type="text" inputmode="none" readonly maxlength="3" data-m="' + m.id + '" data-d="' + d.id + '" class="' + inputCls('money-input', !!val) + (val ? ' has-val' : '') + '" value="' + (val ? fmt(val) : '') + '" placeholder="0" aria-label="' + escapeHtml((m.name || '회원') + ' ' + fmtDateFull(d.iso) + ' 타수 입력') + '" /></td>';
+        h += '<td class="cell-money" data-col="date:' + d.id + '"' + wStyle('date:' + d.id) + '><input type="tel" inputmode="numeric" pattern="[0-9]*" enterkeyhint="next" autocomplete="off" maxlength="3" data-m="' + m.id + '" data-d="' + d.id + '" class="' + inputCls('money-input', !!val) + (val ? ' has-val' : '') + '" value="' + (val ? fmt(val) : '') + '" placeholder="0" aria-label="' + escapeHtml((m.name || '회원') + ' ' + fmtDateFull(d.iso) + ' 타수 입력') + '" /></td>';
         h += '<td class="cell-rank" data-rank-member="' + m.id + '" data-rank-date="' + d.id + '">' + (rankFor(m.id, d.id) || '') + '</td>';
       });
       h += '</tr>';
@@ -715,7 +715,7 @@ function baseTotalAmount() {
     if (_vd.hiddenCount > 0) h += '<td class="foot-extra-filler"></td>';
     _vd.visible.forEach(function (d) {
       var ex = expenseFor(d.id);
-      h += '<td colspan="2" class="foot-extra-cell foot-date-value"><input type="text" inputmode="none" readonly class="extra-input' + (ex ? ' has-val' : '') + '" data-expense-date="' + d.id + '" value="' + (ex ? fmt(ex) : '') + '" placeholder="0" aria-label="' + escapeHtml(fmtDateFull(d.iso) + ' 날짜별 지출 입력') + '" /></td>';
+      h += '<td colspan="2" class="foot-extra-cell foot-date-value"><input type="tel" inputmode="numeric" pattern="[0-9]*" enterkeyhint="done" autocomplete="off" maxlength="9" class="extra-input' + (ex ? ' has-val' : '') + '" data-expense-date="' + d.id + '" value="' + (ex ? fmt(ex) : '') + '" placeholder="0" aria-label="' + escapeHtml(fmtDateFull(d.iso) + ' 날짜별 지출 입력') + '" /></td>';
     });
     h += '</tr>';
 
@@ -790,6 +790,22 @@ function baseTotalAmount() {
       }
       var m1 = findMember(t.getAttribute('data-name'));
       if (m1) { m1.name = t.value; save(); }
+      return;
+    }
+    if (t.matches('.money-input')) {
+      var key = cellKey(t.getAttribute('data-m'), t.getAttribute('data-d'));
+      var previous = Number(state.cells[key]) || 0;
+      var digits = String(t.value || '').replace(/[^0-9]/g, '').slice(0, 3);
+      var value = Math.min(MAX_SCORE, Math.max(0, Number(digits) || 0));
+      t.value = digits;
+      t.classList.toggle('has-val', !!value);
+      if (value !== previous) {
+        if (value) state.cells[key] = value; else delete state.cells[key];
+        queueCellEdit(key, value, previous);
+        saveLocal();
+        scheduleServerSave();
+        refreshTotals();
+      }
     }
   });
   // 잔액(자동 계산: 총액 - 각 날짜의 지출)을 실시간 갱신 (표 안 tfoot 셀)
@@ -945,7 +961,9 @@ function baseTotalAmount() {
     var t = e.target; if (!t.matches('.extra-input')) return;
     t.dataset.originalValue = t.value;
     if (t.hasAttribute('data-expense-date')) {
-      openExpenseQuickPad(t);
+      var current = savedExpenseValue(t);
+      t.value = current ? String(current) : '';
+      try { t.select(); } catch (x) {}
       return;
     }
     if (!isAdmin) return;
@@ -954,9 +972,21 @@ function baseTotalAmount() {
   foot.addEventListener('input', function (e) {
     var t = e.target; if (!t.matches('.extra-input')) return;
     if (t.hasAttribute('data-expense-date')) {
-      expenseDraft = String(parseNum(t.value) || '');
-      expenseReplaceOnNextDigit = false;
-      updateExpenseQuickPreview();
+      var dateId = t.getAttribute('data-expense-date');
+      var previous = savedExpenseValue(t);
+      var digits = String(t.value || '').replace(/[^0-9]/g, '').slice(0, 9);
+      var value = Math.max(0, Number(digits) || 0);
+      t.value = digits;
+      t.classList.toggle('has-val', !!value);
+      if (value && value !== previous) {
+        if (!state.extra) state.extra = { expenses: {} };
+        if (!state.extra.expenses) state.extra.expenses = {};
+        state.extra.expenses[dateId] = value;
+        queueExpenseEdit(dateId, value, previous);
+        saveLocal();
+        scheduleServerSave();
+        refreshBalance();
+      }
       return;
     }
     if (!isAdmin) return;
@@ -980,17 +1010,15 @@ function baseTotalAmount() {
   });
   foot.addEventListener('keydown', function (e) {
     var t = e.target; if (!t.matches('[data-expense-date]')) return;
-    if (/^[0-9]$/.test(e.key)) { e.preventDefault(); enterExpenseDigit(e.key); }
-    else if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); clearExpenseDraft(); }
-    else if (e.key === 'Enter') { e.preventDefault(); completeExpenseQuickPad(); }
-    else if (e.key === 'Escape') { e.preventDefault(); closeExpenseQuickPad(false); }
+    if (e.key === 'Enter') { e.preventDefault(); t.blur(); }
   });
   foot.addEventListener('blur', function (e) {
     var t = e.target; if (!t.matches('.extra-input')) return;
     if (t.hasAttribute('data-expense-date')) {
-      setTimeout(function () {
-        if (expenseTarget === t && document.activeElement !== t) closeExpenseQuickPad(false);
-      }, 0);
+      var saved = savedExpenseValue(t);
+      t.value = saved ? fmt(saved) : '';
+      t.classList.toggle('has-val', !!saved);
+      setTimeout(flushPendingServerData, 50);
       return;
     }
     if (!isAdmin) return;
@@ -1011,8 +1039,7 @@ function baseTotalAmount() {
     if (t.matches('.name-input, .money-input')) t.dataset.originalValue = t.value;
     if (!t.matches('.money-input')) return;
     var num = parseNum(t.value); t.value = num ? String(num) : '';
-    setTimeout(function () { try { t.select(); } catch (x) {} }, 0);
-    openQuickPad(t); // 자주 쓰는 타수 빠른입력 도우미 표시
+    try { t.select(); } catch (x) {} // 자주 쓰는 타수 빠른입력 도우미 표시
   }, true);
   body.addEventListener('blur', function (e) {
     var t = e.target; if (!t.matches('.money-input')) return;
@@ -1027,10 +1054,7 @@ function baseTotalAmount() {
   body.addEventListener('keydown', function (e) {
     var t = e.target;
     if (t.matches('.money-input')) {
-      if (/^[0-9]$/.test(e.key)) { e.preventDefault(); enterQuickDigit(e.key); }
-      else if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); clearQuickDraft(); }
-      else if (e.key === 'Enter') { e.preventDefault(); completeQuickPad(); }
-      else if (e.key === 'Escape') { e.preventDefault(); closeQuickPad(false); }
+      if (e.key === 'Enter') { e.preventDefault(); t.blur(); }
       return;
     }
     if (e.key !== 'Enter' || !t.matches('.name-input')) return;
