@@ -137,6 +137,7 @@ html, body {
 .money-input.locked:focus, .name-input.locked:focus {
   outline: none; background: #f5f5f5;
 }
+.extra-input.locked { background: #eef2f3 !important; color: #455a64 !important; cursor: not-allowed; }
 .admin-note {
   background: #fff3e0; border: 1px solid #ffb74d; color: #e65100;
   border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-bottom: 14px;
@@ -196,7 +197,9 @@ html, body {
 .col-rank { width: var(--w-rank); min-width: var(--w-rank); }
 .col-date-group { background: var(--green) !important; border-left: 2px solid #f3cf57; }
 .sheet thead .date-group-row th { position: sticky; top: 0; z-index: 14; }
-.sheet thead .date-sub-row th { position: static; padding: 5px 3px; }
+.sheet thead .date-sub-row th {
+  position: sticky; top: var(--date-group-height, 58px); z-index: 13; padding: 5px 3px;
+}
 .col-rank { background: #f3cf57 !important; color: #3a2a00 !important; }
 .col-total { width: var(--w-total); min-width: var(--w-total); background: var(--gold) !important; color: #3a2a00; }
 .average-head { display: flex; flex-direction: column; align-items: center; gap: 3px; }
@@ -257,10 +260,8 @@ html, body {
   background: var(--green-soft);
   border-right: 1px solid var(--grid);
 }
-.col-total, .cell-total {
-  position: static;
-}
-.sheet thead th.col-total { z-index: 14; }
+.cell-total { position: static; }
+.sheet thead th.col-total { position: sticky; top: 0; z-index: 14; }
 .sheet tfoot td.foot-grand { position: sticky; right: 0; bottom: 0; z-index: 13; }
 
 .cell-no {
@@ -564,42 +565,42 @@ html, body {
   border-radius: 50%; background: #fff; border: none; cursor: pointer; font-size: 16px; color: var(--text);
 }
 
-/* ===== 천원 단위 빠른입력 팝오버 ===== */
+/* ===== 0~9 타수 빠른입력 숫자판: 화면 오른쪽 고정 ===== */
 .quick-pad {
-  position: fixed; z-index: 90;
-  width: 236px;
+  position: fixed; right: 8px; left: auto; z-index: 90;
+  width: 184px;
   background: #fff;
-  border: 1px solid var(--grid-strong);
+  border: 2px solid var(--green);
   border-radius: 12px;
-  box-shadow: 0 10px 30px rgba(15,81,50,.22);
-  padding: 10px;
+  box-shadow: 0 10px 30px rgba(15,81,50,.28);
+  padding: 8px;
   animation: qp-pop .12s ease-out;
 }
-@keyframes qp-pop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes qp-pop { from { opacity: 0; transform: translateX(5px); } to { opacity: 1; transform: translateX(0); } }
+.quick-pad-label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-align: center; color: var(--green-dark); font-size: 11px; font-weight: 800;
+  margin: 0 2px 5px;
+}
 .quick-pad-cur {
-  text-align: center; font-size: 17px; font-weight: 800; color: var(--red);
-  background: var(--total-bg); border-radius: 8px; padding: 7px 0; margin-bottom: 9px;
+  text-align: center; font-size: 16px; font-weight: 800; color: var(--red);
+  background: var(--total-bg); border-radius: 8px; padding: 6px 0; margin-bottom: 7px;
   font-variant-numeric: tabular-nums;
 }
-.quick-pad-cur span { font-size: 19px; }
-.quick-pad-btns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+.quick-pad-cur span { font-size: 20px; }
+.quick-pad-btns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .qp-btn {
-  border: none; border-radius: 9px; padding: 12px 0;
-  font-size: 15px; font-weight: 800; cursor: pointer;
+  min-width: 0; min-height: 42px;
+  border: none; border-radius: 9px; padding: 8px 1px;
+  font-size: 17px; font-weight: 900; cursor: pointer;
   background: var(--green-soft); color: var(--green-dark);
   transition: transform .05s, filter .15s;
 }
 .qp-btn:hover { filter: brightness(.96); }
 .qp-btn:active { transform: scale(.93); }
-.qp-clear { background: #ffe0e0; color: var(--red); }
-.quick-pad-foot { margin-top: 9px; }
-.qp-done {
-  width: 100%; border: none; border-radius: 9px; padding: 11px 0;
-  font-size: 15px; font-weight: 800; cursor: pointer;
-  background: var(--green); color: #fff;
-}
-.qp-done:active { transform: scale(.97); }
-
+.qp-clear { background: #ffe0e0; color: var(--red); font-size: 12px; }
+.qp-done { background: var(--green); color: #fff; font-size: 12px; }
+.qp-clear i, .qp-done i { display: block; margin-bottom: 2px; }
 .hidden { display: none !important; }
 
 /* ===== 좁은 컬럼 폭: 900px 이하 모든 기기(큰 폰·가로화면·태블릿 포함) =====
@@ -665,11 +666,7 @@ html, body {
     overscroll-behavior: contain;
   }
   .sheet { font-size: 13px; }
-  .sheet thead {
-    position: sticky;
-    top: 0;
-    z-index: 30;
-  }
+
   .sheet tfoot td {
     position: sticky;
     height: 30px;
@@ -702,6 +699,9 @@ html, body {
    No/이름/평균타수 고정폭을 최소화하고 날짜 폭도 줄여, 좁은 폰에서도
    날짜가 1일만 나오지 않고 여러 날 + 접힘(···+N일)이 함께 보이도록 한다. */
 @media (max-width: 480px) {
+  .quick-pad { width: 168px; right: 6px; padding: 6px; }
+  .quick-pad-btns { gap: 5px; }
+  .qp-btn { min-height: 39px; padding: 6px 1px; }
   :root {
     --w-no: 18px;
     --w-name: 42px;    /* 회원 이름: 한글 4자 기준 */

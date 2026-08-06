@@ -160,9 +160,30 @@ function baseTotalAmount() {
   var pendingServerSave = false;// 저장 중에 또 변경되면 다시 저장
   var lastAppliedJson = '';     // 폴링 시 동일 데이터면 무시하기 위한 캐시
   var pendingServerData = null; // 입력 중이라 반영을 미룬 서버 데이터(입력 끝나면 적용)
+  var pendingCellEdits = {};    // 완료를 누른 타수만 충돌 재시도용으로 보관
+  var cellEditSequence = 0;
 
   function serializeState() {
     return stripStoredNumberData(state);
+  }
+  function queueCellEdit(key, value) {
+    pendingCellEdits[key] = { value: value, seq: ++cellEditSequence };
+  }
+  function snapshotPendingCellEdits() {
+    var copy = {};
+    Object.keys(pendingCellEdits).forEach(function (key) { copy[key] = Object.assign({}, pendingCellEdits[key]); });
+    return copy;
+  }
+  function replayPendingCellEdits() {
+    Object.keys(pendingCellEdits).forEach(function (key) {
+      var value = Number(pendingCellEdits[key].value) || 0;
+      if (value) state.cells[key] = value; else delete state.cells[key];
+    });
+  }
+  function clearSentCellEdits(sent) {
+    Object.keys(sent).forEach(function (key) {
+      if (pendingCellEdits[key] && pendingCellEdits[key].seq === sent[key].seq) delete pendingCellEdits[key];
+    });
   }
 
   function scheduleServerSave() {
@@ -177,6 +198,7 @@ function baseTotalAmount() {
     if (isSavingToServer) { pendingServerSave = true; return; }
     isSavingToServer = true;
     var payload = serializeState();
+    var sentCellEdits = snapshotPendingCellEdits();
     lastAppliedJson = JSON.stringify(payload);
     fetch('/api/sheet', {
       method: 'PUT',
@@ -186,11 +208,15 @@ function baseTotalAmount() {
       return r.json().then(function (j) { return { status: r.status, body: j }; });
     }).then(function (res) {
       if (res.status === 409 && res.body && res.body.conflict) {
-        // 다른 기기가 먼저 저장함 → 서버 최신을 받아 병합 후 다시 저장
+        // 다른 사람이 먼저 저장했으면 서버 최신본을 기준으로 완료된 내 타수만 다시 적용한다.
         serverRev = res.body.rev || serverRev;
-        if (res.body.data) { applyServerData(res.body.data); }
+        if (res.body.data) {
+          state = normalizeState(res.body.data);
+          replayPendingCellEdits();
+          saveLocal();
+          render();
+        }
         isSavingToServer = false;
-        // 병합된 내 변경을 다시 저장(최신 rev 기준)
         scheduleServerSave();
         return;
       }
@@ -198,16 +224,19 @@ function baseTotalAmount() {
         isSavingToServer = false;
         if (isAdmin) handleAdminExpired();
         else if (res.status === 403) {
-          alert('기존 값 삭제는 관리자 로그인이 필요합니다. 서버의 원래 값으로 되돌립니다.');
-          reloadFromServer();
+          alert('총액·지출 변경 또는 기존 값 삭제는 관리자 로그인이 필요합니다. 서버 최신값으로 다시 맞춥니다.');
+          reloadFromServer().then(function () {
+            if (Object.keys(pendingCellEdits).length) scheduleServerSave();
+          });
         }
         return;
       }
-      if (res.body && res.body.ok) { serverRev = res.body.rev || serverRev; }
+      if (res.body && res.body.ok) { serverRev = res.body.rev || serverRev; clearSentCellEdits(sentCellEdits); }
       isSavingToServer = false;
-      if (pendingServerSave) { pendingServerSave = false; scheduleServerSave(); }
+      if (pendingServerSave || Object.keys(pendingCellEdits).length) { pendingServerSave = false; scheduleServerSave(); }
     }).catch(function () {
-      isSavingToServer = false; // 오프라인 등 실패 시 로컬 저장만 유지
+      isSavingToServer = false; // 오프라인이면 완료된 타수는 로컬에 유지하고 잠시 뒤 재시도
+      if (Object.keys(pendingCellEdits).length) setTimeout(scheduleServerSave, 1500);
     });
   }
 
@@ -238,6 +267,7 @@ function baseTotalAmount() {
     if (!d || !d.members) return;
     if (isEditing()) { pendingServerData = d; return; }
     state = normalizeState(d);
+    replayPendingCellEdits();
     saveLocal();
     render();
     renderAdmin && renderAdmin();
@@ -384,8 +414,8 @@ function baseTotalAmount() {
     _vd = computeVisibleDates();
     applyLabels();
     renderHead(); renderBody(); renderFoot(); applyWidths();
-    // 표 너비가 바뀌면 상단 헤더(버튼 영역)도 그 길이에 맞춰 확장
-    requestAnimationFrame(syncHeaderWidth);
+    // 표 너비와 2단 헤더의 실제 높이를 렌더 뒤 계산한다.
+    requestAnimationFrame(function () { syncHeaderWidth(); syncStickyHeaderOffsets(); });
   }
 
   // 상단 제목 등 정적 DOM에 편집된 문구를 반영
@@ -407,6 +437,11 @@ function baseTotalAmount() {
     var tableW = sheet.getBoundingClientRect().width;
     // 좌우 패딩(28px)을 더해 표 오른쪽 끝까지 헤더가 이어지도록
     inner.style.minWidth = (tableW + 28) + 'px';
+  }
+  function syncStickyHeaderOffsets() {
+    var firstRow = head && head.querySelector('.date-group-row');
+    if (!firstRow) return;
+    head.style.setProperty('--date-group-height', Math.ceil(firstRow.getBoundingClientRect().height) + 'px');
   }
 
   // 좁은 화면(모바일/태블릿/가로화면 등 900px 이하)인지 판단.
@@ -502,7 +537,7 @@ function baseTotalAmount() {
       if (_vd.hiddenCount > 0) h += '<td class="cell-fold" title="숨겨진 날짜"></td>';
       _vd.visible.forEach(function (d) {
         var val = state.cells[cellKey(m.id, d.id)];
-        h += '<td class="cell-money" data-col="date:' + d.id + '"' + wStyle('date:' + d.id) + '><input type="text" inputmode="numeric" maxlength="3" data-m="' + m.id + '" data-d="' + d.id + '" class="' + inputCls('money-input', !!val) + (val ? ' has-val' : '') + '" value="' + (val ? fmt(val) : '') + '" placeholder="0" /></td>';
+        h += '<td class="cell-money" data-col="date:' + d.id + '"' + wStyle('date:' + d.id) + '><input type="text" inputmode="none" readonly maxlength="3" data-m="' + m.id + '" data-d="' + d.id + '" class="' + inputCls('money-input', !!val) + (val ? ' has-val' : '') + '" value="' + (val ? fmt(val) : '') + '" placeholder="0" aria-label="' + escapeHtml((m.name || '회원') + ' ' + fmtDateFull(d.iso) + ' 타수 입력') + '" /></td>';
         h += '<td class="cell-rank" data-rank-member="' + m.id + '" data-rank-date="' + d.id + '">' + (rankFor(m.id, d.id) || '') + '</td>';
       });
       h += '</tr>';
@@ -521,14 +556,14 @@ function baseTotalAmount() {
 
     var valueSpan = (_vd.hiddenCount > 0 ? 1 : 0) + (_vd.visible.length * 2);
     if (valueSpan < 1) valueSpan = 1;
-    var total = currentTotalAmount();
-    h += '<tr class="foot-extra-row foot-total-row"><td class="foot-extra-label" colspan="3"><i class="fas fa-coins"></i>총액</td><td colspan="' + valueSpan + '" class="foot-extra-cell foot-total-cell"><input type="text" inputmode="numeric" pattern="[0-9]*" class="extra-input total-input has-val" data-total-amount="1" value="' + fmt(total) + '" placeholder="0" /></td></tr>';
+    var total = baseTotalAmount();
+    h += '<tr class="foot-extra-row foot-total-row"><td class="foot-extra-label" colspan="3"><i class="fas fa-coins"></i>총액</td><td colspan="' + valueSpan + '" class="foot-extra-cell foot-total-cell"><input type="text" inputmode="numeric" pattern="[0-9]*" class="extra-input total-input has-val' + (isAdmin ? '' : ' locked') + '" data-total-amount="1" value="' + fmt(total) + '" placeholder="0"' + (isAdmin ? '' : ' readonly aria-readonly="true"') + ' /></td></tr>';
 
     h += '<tr class="foot-extra-row foot-expense-row"><td class="foot-extra-label" colspan="3"><i class="fas fa-money-bill-wave"></i>날짜별 지출</td>';
     if (_vd.hiddenCount > 0) h += '<td class="foot-extra-filler"></td>';
     _vd.visible.forEach(function (d) {
       var ex = expenseFor(d.id);
-      h += '<td colspan="2" class="foot-extra-cell foot-date-value"><input type="text" inputmode="numeric" pattern="[0-9]*" class="extra-input' + (ex ? ' has-val' : '') + '" data-expense-date="' + d.id + '" value="' + (ex ? fmt(ex) : '') + '" placeholder="0" /></td>';
+      h += '<td colspan="2" class="foot-extra-cell foot-date-value"><input type="text" inputmode="numeric" pattern="[0-9]*" class="extra-input' + (ex ? ' has-val' : '') + (isAdmin ? '' : ' locked') + '" data-expense-date="' + d.id + '" value="' + (ex ? fmt(ex) : '') + '" placeholder="0"' + (isAdmin ? '' : ' readonly aria-readonly="true"') + ' /></td>';
     });
     h += '</tr>';
 
@@ -572,7 +607,7 @@ function baseTotalAmount() {
     });
     var averageWinner = foot.querySelector('[data-average-winner]');
     if (averageWinner) averageWinner.textContent = averageWinnerName();
-    var g = foot.querySelector('[data-total-amount]'); if (g && document.activeElement !== g) g.value = fmt(currentTotalAmount());
+    var g = foot.querySelector('[data-total-amount]'); if (g && document.activeElement !== g) g.value = fmt(baseTotalAmount());
     refreshBalance();
   }
 
@@ -588,23 +623,10 @@ function baseTotalAmount() {
     if (tableWrap) tableWrap.scrollTop = 0;
   });
   // ---------- 입력 ----------
+  // 타수는 빠른 숫자판의 완료 버튼에서만 저장하고, 여기서는 회원 이름만 처리한다.
   body.addEventListener('input', function (e) {
     var t = e.target;
-    if (t.matches('.money-input')) {
-      var num = parseNum(t.value);
-      if (!isAdmin && !num && parseNum(t.dataset.originalValue)) {
-        t.value = t.dataset.originalValue;
-        alert('기존 타수 삭제는 관리자만 할 수 있습니다.');
-        return;
-      }
-      var k = cellKey(t.getAttribute('data-m'), t.getAttribute('data-d'));
-      // 금액 상한: 십만원(100,000). 초과 입력 시 상한값으로 고정
-      if (num > MAX_SCORE) { num = MAX_SCORE; t.value = String(MAX_SCORE); }
-      if (num < 0) num = 0;
-      if (num) state.cells[k] = num; else delete state.cells[k];
-      t.classList.toggle('has-val', !!num); refreshTotals(); save();
-      if (qpTarget === t && quickCur) quickCur.textContent = fmt(num); // 팝오버 현재값 동기화
-    } else if (t.matches('.name-input')) {
+    if (t.matches('.name-input')) {
       if (!isAdmin && !t.value.trim() && (t.dataset.originalValue || '').trim()) {
         t.value = t.dataset.originalValue;
         alert('기존 회원 이름 삭제는 관리자만 할 수 있습니다.');
@@ -625,7 +647,7 @@ function baseTotalAmount() {
     });
   }
   // ============================================================
-  //  지출액 입력 (표 안 합계열 아래 .extra-input) — 누구나 입력·수정 가능
+  //  총액·날짜별 지출 입력 — 관리자만 입력·수정 가능
   //  ★★모바일 키패드 사라짐 방지 (표에 이어붙인 상태에서도 안정) ★★
   //   입력칸은 render 때마다 새로 생성되므로, 특정 엘리먼트가 아니라 foot(tfoot)에
   //   "이벤트 위임"으로 바인딩한다(엘리먼트가 파괴돼도 리스너가 살아있음).
@@ -633,22 +655,18 @@ function baseTotalAmount() {
   //   2) 입력 중 render 는 pendingServerData 로 미룸(isEditing 방어) → 입력칸 파괴 안 됨
   //   3) 실시간 천단위 콤마 + 커서 보정
   foot.addEventListener('focus', function (e) {
-    var t = e.target; if (!t.matches('.extra-input')) return;
+    var t = e.target; if (!t.matches('.extra-input') || !isAdmin) return;
     t.dataset.originalValue = t.value;
     setTimeout(function () { try { t.select(); } catch (x) {} }, 0);
   }, true);
   foot.addEventListener('input', function (e) {
-    var t = e.target; if (!t.matches('.extra-input')) return;
+    var t = e.target; if (!t.matches('.extra-input') || !isAdmin) return;
     var num = parseNum(t.value); // 콤마·비숫자 무시, 숫자만
-    if (!isAdmin && !num && parseNum(t.dataset.originalValue)) {
-      t.value = t.dataset.originalValue;
-      alert('기존 금액 삭제는 관리자만 할 수 있습니다.');
-      return;
-    }
+
     if (num < 0) num = 0;
     if (!state.extra) state.extra = { expenses: {} };
     if (t.hasAttribute('data-total-amount')) {
-      state.extra.total = num + totalExpensesAll();
+      state.extra.total = num;
     } else {
       if (!state.extra.expenses) state.extra.expenses = {};
       var expenseDateId = t.getAttribute('data-expense-date');
@@ -672,7 +690,7 @@ function baseTotalAmount() {
     saveLocal();           // 로컬에만 즉시 저장 (서버 저장은 blur 때)
   });
   foot.addEventListener('blur', function (e) {
-    var t = e.target; if (!t.matches('.extra-input')) return;
+    var t = e.target; if (!t.matches('.extra-input') || !isAdmin) return;
     var num = parseNum(t.value);
     t.value = num ? fmt(num) : '';            // 콤마 표기 정리
     scheduleServerSave();                     // 입력 완료 후에만 서버 저장
@@ -685,7 +703,7 @@ function baseTotalAmount() {
     if (!t.matches('.money-input')) return;
     var num = parseNum(t.value); t.value = num ? String(num) : '';
     setTimeout(function () { try { t.select(); } catch (x) {} }, 0);
-    openQuickPad(t); // 천원 단위 빠른입력 팝오버 표시
+    openQuickPad(t); // 0~9 빠른 타수 숫자판 표시
   }, true);
   body.addEventListener('blur', function (e) {
     var t = e.target; if (!t.matches('.money-input')) return;
@@ -696,114 +714,170 @@ function baseTotalAmount() {
   // 이름/타수 입력칸 등에서도 포커스 해제되면 미뤄둔 데이터 반영
   body.addEventListener('focusout', function () { setTimeout(flushPendingServerData, 100); });
 
-  // 표 입력칸에서 Enter → 다음 회원(아래 행)의 같은 열로 이동.
-  // 마지막 행에서 Enter면 회원을 자동 추가하고 새 행으로 이동(추가입력처럼 계속 넘어감).
+  // PC 키보드도 숫자판과 같은 임시 입력 규칙을 사용한다. Enter=완료, Esc=취소.
   body.addEventListener('keydown', function (e) {
-    if (e.key !== 'Enter') return;
     var t = e.target;
-    var kind = null, id = null;
-    if (t.matches('.name-input')) { kind = 'name'; id = t.getAttribute('data-name'); }
-    else if (t.matches('.money-input')) { kind = 'money'; id = t.getAttribute('data-m'); }
-    else return;
+    if (t.matches('.money-input')) {
+      if (/^[0-9]$/.test(e.key)) { e.preventDefault(); enterQuickDigit(e.key); }
+      else if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); eraseQuickDigit(); }
+      else if (e.key === 'Enter') { e.preventDefault(); completeQuickPad(); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeQuickPad(false); }
+      return;
+    }
+    if (e.key !== 'Enter' || !t.matches('.name-input')) return;
     e.preventDefault();
-
+    var id = t.getAttribute('data-name');
     var idx = -1;
     for (var i = 0; i < state.members.length; i++) if (state.members[i].id === id) { idx = i; break; }
     if (idx === -1) return;
-
-    // 마지막 행이면 회원 추가
     if (idx === state.members.length - 1) {
       state.members.push({ id: uid(), name: '' });
       save(); render();
     }
-    // 다음 행의 같은 종류 칸으로 포커스
     var rows = body.querySelectorAll('tr');
     var next = rows[idx + 1];
-    if (!next) return;
-    var sel = kind === 'name' ? '.name-input' : '.money-input';
-    var el;
-    if (kind === 'money') {
-      // 금액은 같은 날짜(data-d) 열을 유지
-      var d = t.getAttribute('data-d');
-      el = next.querySelector('.money-input[data-d="' + d + '"]');
-    } else {
-      el = next.querySelector(sel);
-    }
+    var el = next && next.querySelector('.name-input');
     if (el) { el.focus(); try { el.select(); } catch (x) {} }
   });
 
-  // ---------- 천원 단위 빠른입력 팝오버 ----------
+  // ---------- 0~9 타수 빠른입력 숫자판 ----------
   var quickPad = document.getElementById('quick-pad');
   var quickCur = document.getElementById('quick-cur');
-  var qpTarget = null; // 현재 편집 중인 money-input
+  var quickLabel = document.getElementById('quick-label');
+  var qpTarget = null;
+  var qpDraft = '';
+  var qpReplaceOnNextDigit = true;
 
-  function qpCanEdit(t) {
-    // 모든 금액칸을 누구나 편집 가능
-    return true;
+  function qpCanEdit() { return true; }
+
+  function savedQuickValue(t) {
+    if (!t) return 0;
+    return Number(state.cells[cellKey(t.getAttribute('data-m'), t.getAttribute('data-d'))]) || 0;
+  }
+
+  function updateQuickPreview() {
+    if (!qpTarget) return;
+    var display = qpDraft || '0';
+    qpTarget.value = qpDraft;
+    qpTarget.classList.toggle('has-val', !!parseNum(qpDraft));
+    quickCur.textContent = display;
+  }
+
+  function keepTargetVisibleBesidePad(t) {
+    var wrap = document.getElementById('table-wrap');
+    if (!wrap || window.innerWidth > 900) return;
+    var r = t.getBoundingClientRect();
+    var openAreaRight = window.innerWidth - quickPad.offsetWidth - 18;
+    if (r.right > openAreaRight) wrap.scrollLeft += (r.right - openAreaRight + 8);
   }
 
   function openQuickPad(t) {
-    if (!qpCanEdit(t)) { quickPad.classList.add('hidden'); qpTarget = null; return; }
+    if (!qpCanEdit(t)) return;
+    if (qpTarget && qpTarget !== t) closeQuickPad(false);
     qpTarget = t;
-    quickCur.textContent = fmt(parseNum(t.value));
-    positionQuickPad(t);
+    var current = savedQuickValue(t);
+    qpDraft = current ? String(current) : '';
+    qpReplaceOnNextDigit = true;
+    var member = findMember(t.getAttribute('data-m'));
+    var date = findDate(t.getAttribute('data-d'));
+    quickLabel.textContent = ((member && member.name) || '이름 없음') + ' · ' + (date ? fmtDateFull(date.iso) : '날짜');
     quickPad.classList.remove('hidden');
+    keepTargetVisibleBesidePad(t);
+    positionQuickPad(t);
+    updateQuickPreview();
   }
 
   function positionQuickPad(t) {
+    if (!t || quickPad.classList.contains('hidden')) return;
     var r = t.getBoundingClientRect();
-    var padW = 236;
-    // 입력칸 바로 아래에 배치, 화면 밖으로 나가지 않게 보정
-    var left = r.left + (r.width / 2) - (padW / 2);
-    if (left < 8) left = 8;
-    if (left + padW > window.innerWidth - 8) left = window.innerWidth - 8 - padW;
-    var top = r.bottom + 6;
-    // 아래 공간이 부족하면 위쪽에 표시
-    if (top + 150 > window.innerHeight) top = r.top - 156;
-    quickPad.style.left = left + 'px';
+    var padH = quickPad.offsetHeight || 250;
+    var header = document.getElementById('app-header');
+    var minTop = header ? Math.ceil(header.getBoundingClientRect().bottom + 6) : 8;
+    var maxTop = Math.max(minTop, window.innerHeight - padH - 8);
+    var top = Math.max(minTop, Math.min(maxTop, r.top + (r.height / 2) - (padH / 2)));
+    quickPad.style.left = 'auto';
+    quickPad.style.right = '8px';
     quickPad.style.top = top + 'px';
   }
 
-  function applyQuickValue(num) {
-    if (!qpTarget) return;
-    if (num > MAX_SCORE) num = MAX_SCORE;
-    if (num < 0) num = 0;
-    var k = cellKey(qpTarget.getAttribute('data-m'), qpTarget.getAttribute('data-d'));
-    if (num) state.cells[k] = num; else delete state.cells[k];
-    qpTarget.value = num ? String(num) : '';
-    qpTarget.classList.toggle('has-val', !!num);
-    quickCur.textContent = fmt(num);
-    refreshTotals(); save();
+  function enterQuickDigit(digit) {
+    if (!qpTarget || !/^[0-9]$/.test(String(digit))) return;
+    var next = qpReplaceOnNextDigit ? String(digit) : (qpDraft + String(digit));
+    qpReplaceOnNextDigit = false;
+    next = next.replace(/^0+(?=\d)/, '').slice(0, 3);
+    if ((Number(next) || 0) > MAX_SCORE) next = String(MAX_SCORE);
+    qpDraft = next;
+    updateQuickPreview();
   }
 
-  function closeQuickPad() { quickPad.classList.add('hidden'); qpTarget = null; }
-
-  quickPad.addEventListener('mousedown', function (e) { e.preventDefault(); }); // 입력칸 blur 방지
-  quickPad.addEventListener('click', function (e) {
-    var add = e.target.closest('[data-add]');
-    var clr = e.target.closest('[data-clear]');
-    var done = e.target.closest('.qp-done');
-    if (add) {
-      if (!qpTarget) return;
-      applyQuickValue(parseNum(qpTarget.value) + Number(add.getAttribute('data-add')));
-    } else if (clr) {
-      applyQuickValue(0);
-    } else if (done) {
-      var tv = qpTarget; closeQuickPad();
-      if (tv) { var n = parseNum(tv.value); tv.value = n ? fmt(n) : ''; renderBody(); applyWidths(); }
+  function eraseQuickDigit() {
+    if (!qpTarget) return;
+    if (qpReplaceOnNextDigit) {
+      qpDraft = '';
+      qpReplaceOnNextDigit = false;
+    } else {
+      qpDraft = qpDraft.slice(0, -1);
     }
+    updateQuickPreview();
+  }
+
+  function closeQuickPad(committed) {
+    if (qpTarget && !committed) {
+      var original = savedQuickValue(qpTarget);
+      qpTarget.value = original ? fmt(original) : '';
+      qpTarget.classList.toggle('has-val', !!original);
+    }
+    quickPad.classList.add('hidden');
+    qpTarget = null;
+    qpDraft = '';
+    qpReplaceOnNextDigit = true;
+  }
+
+  function completeQuickPad() {
+    if (!qpTarget) return;
+    var target = qpTarget;
+    var key = cellKey(target.getAttribute('data-m'), target.getAttribute('data-d'));
+    var previous = Number(state.cells[key]) || 0;
+    var value = Math.min(MAX_SCORE, Math.max(0, parseNum(qpDraft)));
+    if (!isAdmin && previous && !value) {
+      alert('기존 타수 삭제는 관리자만 할 수 있습니다.');
+      qpDraft = String(previous);
+      qpReplaceOnNextDigit = true;
+      updateQuickPreview();
+      return;
+    }
+    if (value !== previous) {
+      if (value) state.cells[key] = value; else delete state.cells[key];
+      queueCellEdit(key, value);
+      saveLocal();
+      scheduleServerSave();
+    }
+    closeQuickPad(true);
+    renderBody();
+    applyWidths();
+    refreshTotals();
+  }
+
+  quickPad.addEventListener('mousedown', function (e) { e.preventDefault(); });
+  quickPad.addEventListener('click', function (e) {
+    var digit = e.target.closest('[data-digit]');
+    var clear = e.target.closest('[data-clear]');
+    var done = e.target.closest('.qp-done');
+    if (digit) enterQuickDigit(digit.getAttribute('data-digit'));
+    else if (clear) eraseQuickDigit();
+    else if (done) completeQuickPad();
   });
-  // 팝오버·입력칸 바깥을 누르면 닫기
+  // 숫자판 밖을 누르면 임시값을 취소한다. 완료를 눌러야만 저장된다.
   document.addEventListener('mousedown', function (e) {
     if (quickPad.classList.contains('hidden')) return;
     if (e.target.closest('#quick-pad')) return;
     if (e.target.closest('.money-input')) return;
-    closeQuickPad();
+    closeQuickPad(false);
   });
   var resizeReRenderTimer = null;
   window.addEventListener('resize', function () {
     if (qpTarget) positionQuickPad(qpTarget);
-    syncHeaderWidth();
+    syncHeaderWidth(); syncStickyHeaderOffsets();
     // 화면 폭이 바뀌면 접힘 개수도 달라지므로 다시 렌더(입력 중이면 건너뜀)
     if (resizeReRenderTimer) clearTimeout(resizeReRenderTimer);
     resizeReRenderTimer = setTimeout(function () {
@@ -985,7 +1059,7 @@ function baseTotalAmount() {
     state.dates.forEach(function (d) { winnerRow.push(dateBestScore(d.id) || ''); winnerRow.push(dateWinnerNames(d.id)); });
     rows.push(winnerRow);
     var span = state.dates.length * 2;
-    var totalRow = ['', '총액', '']; for (var i = 0; i < span - 1; i++) totalRow.push(''); totalRow.push(currentTotalAmount()); rows.push(totalRow);
+    var totalRow = ['', '총액', '']; for (var i = 0; i < span - 1; i++) totalRow.push(''); totalRow.push(baseTotalAmount()); rows.push(totalRow);
     var expRow = ['', '날짜별 지출', '']; state.dates.forEach(function (d) { expRow.push(expenseFor(d.id)); expRow.push(''); }); rows.push(expRow);
     var balRow = ['', '날짜별 잔액', '']; state.dates.forEach(function (d) { balRow.push(balanceFor(d.id)); balRow.push(''); }); rows.push(balRow);
     var csv = rows.map(function (r) {
@@ -1086,7 +1160,7 @@ function baseTotalAmount() {
         banner.innerHTML = '<i class="fas fa-lock-open"></i><span class="mode-banner-text">관리자 모드 · 모든 값을 <b>수정·삭제</b>할 수 있습니다</span>';
       } else {
         banner.className = 'mode-banner mode-user';
-        banner.innerHTML = '<i class="fas fa-pen"></i><span class="mode-banner-text">일반 사용자 모드 · 값을 <b>입력·수정</b>할 수 있습니다. 기존 값·회원·날짜·이미지 삭제는 관리자만 가능합니다.</span>';
+        banner.innerHTML = '<i class="fas fa-pen"></i><span class="mode-banner-text">일반 사용자 모드 · 회원이름과 타수는 <b>입력·수정</b>할 수 있습니다. 총액·날짜별 지출과 모든 삭제는 관리자만 가능합니다.</span>';
       }
     }
   }

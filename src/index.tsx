@@ -237,7 +237,8 @@ function requiresAdminForSheetChange(current: SheetData | null, next: SheetData)
     if (isMeaningfulValue(member.name) && !isMeaningfulValue(nextMember.name)) return true
   }
   if (removesMapValue(current.cells, next.cells)) return true
-  if (removesNestedValue(current.extra, next.extra)) return true
+  // 총액과 날짜별 지출은 값 추가·수정·삭제 모두 관리자만 허용한다.
+  if (JSON.stringify(current.extra ?? null) !== JSON.stringify(next.extra ?? null)) return true
   if (removesNestedValue(current.manager, next.manager)) return true
   return JSON.stringify(current.labels ?? null) !== JSON.stringify(next.labels ?? null)
 }
@@ -489,7 +490,7 @@ app.get('/', (c) => {
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⛳</text></svg>">
   <title>사보회</title>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
-  <link href="/static/style.css?v=20260805h1" rel="stylesheet">
+  <link href="/static/style.css?v=20260806a1" rel="stylesheet">
 </head>
 <body>
   <header class="app-header" id="app-header">
@@ -508,7 +509,7 @@ app.get('/', (c) => {
 
   <main class="app-main" id="view-sheet">
     <div id="mode-banner" class="mode-banner mode-user">
-      <i class="fas fa-pen"></i><span class="mode-banner-text">일반 사용자 모드 · 값을 <b>입력·수정</b>할 수 있습니다. 기존 값·회원·날짜·이미지 삭제는 관리자만 가능합니다.</span>
+      <i class="fas fa-pen"></i><span class="mode-banner-text">일반 사용자 모드 · 회원이름과 타수는 <b>입력·수정</b>할 수 있습니다. 총액·날짜별 지출과 모든 삭제는 관리자만 가능합니다.</span>
     </div>
     <div class="table-wrap" id="table-wrap">
       <table id="sheet" class="sheet">
@@ -607,19 +608,23 @@ app.get('/', (c) => {
     </div>
   </div>
 
-  <!-- 타수 빠른입력 팝오버 -->
+  <!-- 타수 빠른입력 숫자판: 완료를 눌렀을 때만 서버에 저장 -->
   <div id="quick-pad" class="quick-pad hidden">
+    <div id="quick-label" class="quick-pad-label">회원 · 날짜</div>
     <div class="quick-pad-cur"><span id="quick-cur">0</span> 타</div>
     <div class="quick-pad-btns">
-      <button class="qp-btn qp-add" data-add="1">+1</button>
-      <button class="qp-btn qp-add" data-add="2">+2</button>
-      <button class="qp-btn qp-add" data-add="3">+3</button>
-      <button class="qp-btn qp-add" data-add="5">+5</button>
-      <button class="qp-btn qp-add" data-add="10">+10</button>
+      <button class="qp-btn" data-digit="1">1</button>
+      <button class="qp-btn" data-digit="2">2</button>
+      <button class="qp-btn" data-digit="3">3</button>
+      <button class="qp-btn" data-digit="4">4</button>
+      <button class="qp-btn" data-digit="5">5</button>
+      <button class="qp-btn" data-digit="6">6</button>
+      <button class="qp-btn" data-digit="7">7</button>
+      <button class="qp-btn" data-digit="8">8</button>
+      <button class="qp-btn" data-digit="9">9</button>
       <button class="qp-btn qp-clear" data-clear="1"><i class="fas fa-eraser"></i> 지움</button>
-    </div>
-    <div class="quick-pad-foot">
-      <button class="qp-done"><i class="fas fa-check"></i> 완료</button>
+      <button class="qp-btn" data-digit="0">0</button>
+      <button class="qp-btn qp-done"><i class="fas fa-check"></i> 완료</button>
     </div>
   </div>
 
@@ -632,7 +637,7 @@ app.get('/', (c) => {
     </div>
   </div>
 
-  <script src="/static/app.js?v=20260805h1"></script>
+  <script src="/static/app.js?v=20260806a1"></script>
 </body>
 </html>`)
 })
