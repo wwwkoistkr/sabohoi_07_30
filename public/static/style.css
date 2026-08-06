@@ -22,9 +22,12 @@
 }
 
 html {
-  /* 고해상도(레티나/4K/8K) 대응: rem 기준 스케일 + 선명한 렌더링 */
+  /* 기기 해상도와 브라우저 확대를 존중하며 글자를 연속적으로 반응형 조절 */
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+  font-size: clamp(15px, calc(14px + .22vw), 18px);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
 }
 html, body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
@@ -32,26 +35,17 @@ html, body {
   background: var(--bg);
   color: var(--text);
   height: 100%;
-  font-size: 15px;
-  /* 폰트 안티앨리어싱: 고DPI 화면에서 글자를 선명하게 */
+  font-size: 1rem;
+  font-kerning: normal;
+  font-optical-sizing: auto;
+  /* CSS 픽셀을 기기 픽셀 밀도에 맞춰 선명하게 렌더링 */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  text-rendering: optimizeLegibility;
-  font-feature-settings: "tnum" 1;
+  font-feature-settings: "kern" 1, "tnum" 1;
 }
-/* 초고해상도(2K↑) 화면에서 기본 글자 살짝 키워 선명하게 */
-@media (min-resolution: 2dppx) {
-  body { font-size: 15.5px; }
-}
-@media (min-width: 1600px) {
-  html, body { font-size: 16.5px; }
-}
-@media (min-width: 2560px) {
-  html, body { font-size: 18px; }
-}
-/* 8K/초대형 화면: 표가 화면 가운데로 몰려 시원하게 */
-@media (min-width: 3840px) {
-  html, body { font-size: 22px; }
+button, input, select, textarea {
+  font: inherit;
+  color: inherit;
 }
 
 /* ===== Header ===== */
@@ -167,7 +161,7 @@ html, body {
   border-collapse: separate;
   border-spacing: 0;
   width: max-content;   /* 지정한 컬럼 폭 합만큼만 차지(화면 채우려 늘어나지 않음) */
-  font-size: 14px;
+  font-size: clamp(12px, calc(10px + .8vw), 14px);
   font-variant-numeric: tabular-nums;
   table-layout: fixed;
 }
@@ -642,11 +636,11 @@ html, body {
     --w-total: 60px;   /* 평균타수 */
   }
   /* 좁은 칸에 맞춰 헤더 글자를 작게 + 2줄 허용(칸 폭이 헤더 글자에 눌려 안 줄어드는 것 방지) */
-  .sheet thead th { padding: 9px 2px; font-size: 12px; letter-spacing: 0; }
+  .sheet thead th { padding: 9px 2px; font-size: clamp(11px, calc(9px + .45vw), 12px); letter-spacing: 0; }
   .sheet thead th.col-name { white-space: normal; word-break: keep-all; line-height: 1.15; }
   .date-head .date-lost { font-size: 9px; padding: 1px 5px; }
-  .cell-name input { font-size: 12.5px; }
-  .cell-name input::placeholder { font-size: 10px; }
+  .cell-name input { font-size: clamp(11.5px, calc(10px + .5vw), 12.5px); }
+  .cell-name input::placeholder { font-size: clamp(9.5px, calc(8px + .5vw), 10.5px); }
 }
 
 /* ===== Mobile first: 좁은 화면 UI(폰트/버튼/헤더) 최적화 ===== */
@@ -659,7 +653,7 @@ html, body {
     flex-wrap: wrap; gap: 8px; padding: 8px 10px;
     justify-content: space-between;
   }
-  .app-header h1 { font-size: 16px; flex: 0 0 auto; }
+  .app-header h1 { font-size: clamp(16px, 4.5vw, 20px); flex: 0 0 auto; }
   /* 버튼 5개를 한 줄에 균등 분배(화면폭 안에서 붙여서 꽉 채움).
      PC처럼 아이콘+글씨를 함께 보이게 하되, 글씨를 작게 줄여 5개가 다 들어가게 한다. */
   .header-actions {
@@ -667,19 +661,19 @@ html, body {
   }
   .header-actions .btn {
     flex: 1 1 0; min-width: 0; justify-content: center;
-    padding: 7px 2px; font-size: 10.5px; border-radius: 8px;
+    padding: 7px 2px; font-size: clamp(9.5px, 2.7vw, 10.5px); border-radius: 8px;
     white-space: nowrap; overflow: hidden;
   }
   /* 모바일에서도 버튼 글씨(회원추가·날짜추가 등)를 아이콘과 함께 표시 */
   .header-actions .btn .btn-text {
-    display: inline; font-size: 10.5px; margin-left: 1px;
+    display: inline; font-size: clamp(9.5px, 2.7vw, 10.5px); margin-left: 1px;
   }
-  .header-actions .btn i { margin: 0; font-size: 11px; }
+  .header-actions .btn i { margin: 0; font-size: clamp(10px, 2.8vw, 12px); }
   /* '날짜펼치기'처럼 글자가 긴 버튼은 글씨를 더 작게 하여 5개 버튼 균형 유지 */
-  .header-actions .btn .btn-text-sm { font-size: 9px; letter-spacing: -0.3px; }
+  .header-actions .btn .btn-text-sm { font-size: clamp(8px, 2.35vw, 9px); letter-spacing: -0.2px; }
   /* 상단 안내 메시지: 모바일에서도 PC처럼 자연스럽게 한 문장으로 보이게(글씨만 줄임) */
   .mode-banner {
-    font-size: 11px; padding: 7px 10px; line-height: 1.35;
+    font-size: clamp(10.5px, 2.9vw, 12px); padding: 7px 10px; line-height: 1.35;
     align-items: flex-start; gap: 6px;
   }
   .mode-banner i { margin-top: 1px; }
@@ -692,7 +686,7 @@ html, body {
     overflow-y: auto;
     overscroll-behavior: contain;
   }
-  .sheet { font-size: 13px; }
+  .sheet { font-size: clamp(12px, calc(10px + .8vw), 13px); }
 
   .sheet tfoot td {
     position: sticky;
@@ -708,11 +702,11 @@ html, body {
   .sheet tfoot td.foot-label,
   .sheet tfoot td.foot-extra-label { z-index: 18; }
   .sheet tfoot td.foot-winner {
-    font-size: 12px;
+    font-size: clamp(11px, 3vw, 12px);
     white-space: nowrap;
     text-overflow: ellipsis;
   }
-  .cell-name input, .cell-money input { padding: clamp(5px, .9dvh, 8px) 3px; font-size: 12.5px; line-height: 1.2; }
+  .cell-name input, .cell-money input { padding: clamp(5px, .9dvh, 8px) 3px; font-size: clamp(11.5px, 3.15vw, 12.5px); line-height: 1.25; }
   .admin-cards { grid-template-columns: 1fr; }
   .asset-list { grid-template-columns: repeat(auto-fill, minmax(46%, 1fr)); }
   .storage-architecture { grid-template-columns: 1fr; }
@@ -736,7 +730,7 @@ html, body {
     --w-rank: 20px;    /* 순위: 숫자 2자리 */
     --w-total: 46px;   /* 평균타수 */
   }
-  .sheet thead th { padding: 8px 1px; font-size: 10.5px; }
+  .sheet thead th { padding: 8px 1px; font-size: clamp(10px, 2.9vw, 10.8px); }
   .col-fold, .cell-fold, .foot-fold {
     width: 24px; min-width: 24px; max-width: 24px;
   }
@@ -745,17 +739,17 @@ html, body {
     width: 16px; height: 16px; margin: 1px auto 0;
     font-size: 9px;
   }
-  .date-head .date-text { font-size: 11.5px; }
-  .date-head .date-sub { font-size: 8.5px; }
-  .date-sort-btn { padding: 1px 5px; font-size: 8px; }
-  .date-head .date-lost { font-size: 8px; padding: 1px 3px; }
-  .cell-money input { font-size: 11.5px; padding: clamp(5px, .8dvh, 7px) 1px; }
-  .cell-name input { font-size: 10.5px; padding: clamp(5px, .8dvh, 7px) 1px; }
-  .col-total, .cell-total, .foot-grand { font-size: 10px; white-space: normal !important; line-height: 1.05; }
+  .date-head .date-text { font-size: clamp(10.5px, 3.2vw, 11.5px); }
+  .date-head .date-sub { font-size: clamp(8px, 2.4vw, 8.8px); }
+  .date-sort-btn { padding: 1px 5px; font-size: clamp(7.5px, 2.2vw, 8.5px); }
+  .date-head .date-lost { font-size: clamp(7.5px, 2.2vw, 8.5px); padding: 1px 3px; }
+  .cell-money input { font-size: clamp(11px, 3.2vw, 12px); padding: clamp(5px, .8dvh, 7px) 1px; }
+  .cell-name input { font-size: clamp(10.5px, 3vw, 11.5px); padding: clamp(5px, .8dvh, 7px) 1px; }
+  .col-total, .cell-total, .foot-grand { font-size: clamp(9.5px, 2.7vw, 10.5px); white-space: normal !important; line-height: 1.08; }
   .average-head { gap: 2px; }
-  .average-sort-btn { padding: 1px 4px; font-size: 8.5px; }
+  .average-sort-btn { padding: 1px 4px; font-size: clamp(8px, 2.4vw, 9px); }
   .sheet tfoot td.foot-extra-cell .extra-input,
-  .sheet tfoot td.foot-balance-cell { font-size: 11px; padding: 8px 3px; text-align: right; }
+  .sheet tfoot td.foot-balance-cell { font-size: clamp(10.5px, 3vw, 11.5px); padding: 8px 3px; text-align: right; }
   .sheet tfoot td.foot-date-value,
   .sheet tfoot td.foot-date-value .extra-input,
   .sheet tfoot td.foot-total-cell .total-input { padding-right: 3px; text-align: right; }
