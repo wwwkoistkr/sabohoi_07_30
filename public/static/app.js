@@ -538,7 +538,7 @@ function baseTotalAmount() {
     applyLabels();
     renderHead(); renderBody(); renderFoot(); applyWidths();
     // 표 너비와 2단 헤더의 실제 높이를 렌더 뒤 계산한다.
-    requestAnimationFrame(function () { syncHeaderWidth(); syncStickyHeaderOffsets(); syncStickyFooterOffsets(); });
+    requestAnimationFrame(function () { syncHeaderWidth(); syncStickyHeaderOffsets(); syncStickyFooterOffsets(); syncMobileTableHeight(); });
   }
 
   // 상단 제목 등 정적 DOM에 편집된 문구를 반영
@@ -575,6 +575,21 @@ function baseTotalAmount() {
     sheet.style.setProperty('--foot-balance-height', Math.ceil(balanceRow ? balanceRow.getBoundingClientRect().height : 30) + 'px');
     sheet.style.setProperty('--foot-expense-height', Math.ceil(expenseRow ? expenseRow.getBoundingClientRect().height : 30) + 'px');
     sheet.style.setProperty('--foot-total-height', Math.ceil(totalRow ? totalRow.getBoundingClientRect().height : 30) + 'px');
+  }
+  function syncMobileTableHeight() {
+    var wrap = document.getElementById('table-wrap');
+    if (!wrap) return;
+    if (window.innerWidth > 640) {
+      wrap.style.height = '';
+      wrap.style.maxHeight = '';
+      return;
+    }
+    var viewport = window.visualViewport;
+    var viewportBottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
+    var top = wrap.getBoundingClientRect().top;
+    var available = Math.max(240, Math.floor(viewportBottom - top - 6));
+    wrap.style.height = available + 'px';
+    wrap.style.maxHeight = available + 'px';
   }
 
   // 좁은 화면(모바일/태블릿/가로화면 등 900px 이하)인지 판단.
@@ -1185,7 +1200,7 @@ function baseTotalAmount() {
   var resizeReRenderTimer = null;
   window.addEventListener('resize', function () {
     if (qpTarget) positionQuickPad(qpTarget);
-    syncHeaderWidth(); syncStickyHeaderOffsets(); syncStickyFooterOffsets();
+    syncHeaderWidth(); syncStickyHeaderOffsets(); syncStickyFooterOffsets(); syncMobileTableHeight();
     // 화면 폭이 바뀌면 접힘 개수도 달라지므로 다시 렌더(입력 중이면 건너뜀)
     if (resizeReRenderTimer) clearTimeout(resizeReRenderTimer);
     resizeReRenderTimer = setTimeout(function () {
@@ -1195,6 +1210,7 @@ function baseTotalAmount() {
       render();
     }, 250);
   });
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', syncMobileTableHeight);
   // 표를 가로로 스크롤하면 상단 헤더도 같은 위치로 스크롤 → 버튼이 표 위를 따라감
   var tableWrapEl = document.getElementById('table-wrap');
   var appHeaderEl = document.getElementById('app-header');

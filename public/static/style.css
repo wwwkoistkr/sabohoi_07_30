@@ -686,8 +686,8 @@ html, body {
   /* 모바일에서는 컬럼 드래그 리사이즈 핸들을 숨긴다(불안정 방지, 고정폭 유지) */
   .col-resize { display: none !important; }
   .table-wrap {
-    height: clamp(360px, calc(100dvh - 120px), 460px);
-    max-height: clamp(360px, calc(100dvh - 120px), 460px);
+    height: calc(100dvh - 120px);
+    max-height: none;
     min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
