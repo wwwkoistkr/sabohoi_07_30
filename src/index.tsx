@@ -14,6 +14,7 @@ const ADMIN_SESSION_MS = 8 * 60 * 60 * 1000
 const LOGIN_WINDOW_MS = 15 * 60 * 1000
 const MAX_LOGIN_FAILURES = 5
 const MAX_JSON_BYTES = 1024 * 1024
+const SCORE_EDIT_WINDOW_MS = 24 * 60 * 60 * 1000
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif'])
 
 type AdminTokenPayload = { sub: 'admin'; iat: number; exp: number; nonce: string }
@@ -23,6 +24,7 @@ type SheetData = {
   members: Array<{ id: string; name?: string; [key: string]: unknown }>;
   dates: Array<{ id: string; iso?: string }>;
   cells?: Record<string, unknown>;
+  editTimes?: Record<string, unknown>;
   labels?: unknown;
   [key: string]: unknown;
 }
@@ -199,6 +201,12 @@ function isSheetData(value: unknown): value is SheetData {
       if (typeof score !== 'number' || !Number.isInteger(score) || score < 1 || score > 999) return false
     }
   }
+  if (data.editTimes) {
+    if (typeof data.editTimes !== 'object' || Array.isArray(data.editTimes) || Object.keys(data.editTimes).length > 100000) return false
+    for (const editedAt of Object.values(data.editTimes)) {
+      if (typeof editedAt !== 'number' || !Number.isFinite(editedAt) || editedAt < 0) return false
+    }
+  }
   return true
 }
 
@@ -207,13 +215,6 @@ function isMeaningfulValue(value: unknown): boolean {
   if (typeof value === 'number') return Number.isFinite(value) && value !== 0
   if (typeof value === 'string') return value.trim().length > 0
   return true
-}
-
-function removesMapValue(current: unknown, next: unknown): boolean {
-  if (!current || typeof current !== 'object' || Array.isArray(current)) return false
-  const before = current as Record<string, unknown>
-  const after = next && typeof next === 'object' && !Array.isArray(next) ? next as Record<string, unknown> : {}
-  return Object.keys(before).some((key) => isMeaningfulValue(before[key]) && !isMeaningfulValue(after[key]))
 }
 
 function removesNestedValue(current: unknown, next: unknown): boolean {
@@ -225,6 +226,43 @@ function removesNestedValue(current: unknown, next: unknown): boolean {
   return isMeaningfulValue(current) && !isMeaningfulValue(next)
 }
 
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function changesExpiredScore(current: SheetData, next: SheetData, now = Date.now()): boolean {
+  const currentCells = recordValue(current.cells)
+  const nextCells = recordValue(next.cells)
+  const editTimes = recordValue(current.editTimes)
+  return Object.keys(currentCells).some((key) => {
+    if (!isMeaningfulValue(currentCells[key]) || currentCells[key] === nextCells[key]) return false
+    const editedAt = Number(editTimes[key])
+    return !Number.isFinite(editedAt) || editedAt <= 0 || now - editedAt >= SCORE_EDIT_WINDOW_MS
+  })
+}
+
+function stampCellEditTimes(current: SheetData | null, next: SheetData, now = Date.now()): SheetData {
+  const currentCells = recordValue(current?.cells)
+  const nextCells = recordValue(next.cells)
+  const currentTimes = recordValue(current?.editTimes)
+  const stampedTimes = { ...recordValue(next.editTimes) }
+  const keys = new Set([...Object.keys(currentCells), ...Object.keys(nextCells)])
+  keys.forEach((key) => {
+    if (!isMeaningfulValue(nextCells[key])) {
+      delete stampedTimes[key]
+      return
+    }
+    const previousTime = Number(currentTimes[key])
+    if (isMeaningfulValue(currentCells[key])) {
+      // 최초 입력 시각을 유지한다. 과거 데이터처럼 시각이 없으면 임의로 새 시각을 만들지 않아 계속 관리자만 수정한다.
+      if (Number.isFinite(previousTime) && previousTime > 0) stampedTimes[key] = previousTime
+      else delete stampedTimes[key]
+    } else {
+      stampedTimes[key] = now
+    }
+  })
+  return { ...next, editTimes: stampedTimes }
+}
 function requiresAdminForSheetChange(current: SheetData | null, next: SheetData): boolean {
   if (!current) return false
   const nextMemberIds = new Set(next.members.map((member) => member.id))
@@ -236,7 +274,7 @@ function requiresAdminForSheetChange(current: SheetData | null, next: SheetData)
     if (!nextMember) return true
     if (isMeaningfulValue(member.name) && !isMeaningfulValue(nextMember.name)) return true
   }
-  if (removesMapValue(current.cells, next.cells)) return true
+  if (changesExpiredScore(current, next)) return true
   // 총액과 날짜별 지출은 값 추가·수정·삭제 모두 관리자만 허용한다.
   if (JSON.stringify(current.extra ?? null) !== JSON.stringify(next.extra ?? null)) return true
   if (removesNestedValue(current.manager, next.manager)) return true
@@ -464,7 +502,7 @@ app.put('/api/sheet', async (c) => {
       return c.json({ ok: false, error: 'admin authorization required' }, 403);
     }
     const newRev = curRev + 1;
-    const payload = JSON.stringify(cleanedData);
+    const payload = JSON.stringify(stampCellEditTimes(current.data, cleanedData));
     const result = await c.env.DB.prepare(
       'UPDATE app_state SET rev = ?, data_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1 AND rev = ?'
     ).bind(newRev, payload, curRev).run()
@@ -613,20 +651,35 @@ app.get('/', (c) => {
     <div id="quick-label" class="quick-pad-label">회원 · 날짜</div>
     <div class="quick-pad-cur"><span id="quick-cur">0</span> 타</div>
     <div class="quick-pad-btns">
-      <button class="qp-btn" data-digit="1">1</button>
-      <button class="qp-btn" data-digit="2">2</button>
-      <button class="qp-btn" data-digit="3">3</button>
-      <button class="qp-btn" data-digit="4">4</button>
-      <button class="qp-btn" data-digit="5">5</button>
-      <button class="qp-btn" data-digit="6">6</button>
-      <button class="qp-btn" data-digit="7">7</button>
-      <button class="qp-btn" data-digit="8">8</button>
-      <button class="qp-btn" data-digit="9">9</button>
+      <button class="qp-btn" data-score="80">80</button>
+      <button class="qp-btn" data-score="81">81</button>
+      <button class="qp-btn" data-score="82">82</button>
+      <button class="qp-btn" data-score="90">90</button>
+      <button class="qp-btn" data-score="91">91</button>
+      <button class="qp-btn" data-score="92">92</button>
+      <button class="qp-btn" data-score="100">100</button>
+      <button class="qp-btn" data-score="101">101</button>
+      <button class="qp-btn" data-score="102">102</button>
       <button class="qp-btn qp-clear" data-clear="1"><i class="fas fa-eraser"></i> 지움</button>
-      <button class="qp-btn" data-digit="0">0</button>
-      <button class="qp-btn qp-done"><i class="fas fa-check"></i> 완료</button>
+      <button class="qp-btn qp-done qp-wide"><i class="fas fa-check"></i> 완료</button>
     </div>
   </div>
+
+  <div id="expense-quick-pad" class="quick-pad expense-quick-pad hidden">
+    <div id="expense-quick-label" class="quick-pad-label">날짜별 지출</div>
+    <div class="quick-pad-cur"><span id="expense-quick-cur">0</span> 원</div>
+    <div class="quick-pad-btns">
+      <button class="qp-btn expense-preset" data-expense-value="10000">1만</button>
+      <button class="qp-btn expense-preset" data-expense-value="20000">2만</button>
+      <button class="qp-btn expense-preset" data-expense-value="50000">5만</button>
+      <button class="qp-btn expense-preset" data-expense-value="100000">10만</button>
+      <button class="qp-btn expense-preset" data-expense-value="200000">20만</button>
+      <button class="qp-btn expense-preset" data-expense-value="250000">25만</button>
+      <button class="qp-btn qp-clear" data-expense-clear="1"><i class="fas fa-eraser"></i> 지움</button>
+      <button class="qp-btn qp-done qp-wide" data-expense-done="1"><i class="fas fa-check"></i> 완료</button>
+    </div>
+  </div>
+  <div id="input-toast" class="input-toast hidden" role="status" aria-live="polite">입력되었습니다</div>
 
   <!-- 이미지 크게 보기 -->
   <div id="img-modal" class="modal hidden">
@@ -637,7 +690,7 @@ app.get('/', (c) => {
     </div>
   </div>
 
-  <script src="/static/app.js?v=20260806a1"></script>
+  <script src="/static/app.js?v=20260806c1"></script>
 </body>
 </html>`)
 })

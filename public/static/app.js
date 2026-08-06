@@ -49,6 +49,7 @@
     out.members = out.members.length ? out.members : makeDefaultMembers();
     out.dates = (out.dates && out.dates.length) ? out.dates : makeDefaultDates();
     out.cells = out.cells || {};
+    out.editTimes = (out.editTimes && typeof out.editTimes === 'object') ? out.editTimes : {};
     out.manager = out.manager || { name: '' };
     out.widths = out.widths || {};
     out.labels = mergeLabels(out.labels);
@@ -162,12 +163,17 @@ function baseTotalAmount() {
   var pendingServerData = null; // 입력 중이라 반영을 미룬 서버 데이터(입력 끝나면 적용)
   var pendingCellEdits = {};    // 완료를 누른 타수만 충돌 재시도용으로 보관
   var cellEditSequence = 0;
+  var pendingExtraEdits = {}; // 총액·날짜별 지출도 409 충돌 뒤 다시 적용
+  var extraEditSequence = 0;
 
   function serializeState() {
     return stripStoredNumberData(state);
   }
-  function queueCellEdit(key, value) {
-    pendingCellEdits[key] = { value: value, seq: ++cellEditSequence };
+  function queueCellEdit(key, value, previous) {
+    state.editTimes = state.editTimes || {};
+    var firstEditedAt = Number(state.editTimes[key]) || (previous ? 0 : Date.now());
+    pendingCellEdits[key] = { value: value, seq: ++cellEditSequence, editedAt: firstEditedAt };
+    if (value && firstEditedAt) state.editTimes[key] = firstEditedAt; else delete state.editTimes[key];
   }
   function snapshotPendingCellEdits() {
     var copy = {};
@@ -175,15 +181,73 @@ function baseTotalAmount() {
     return copy;
   }
   function replayPendingCellEdits() {
+    state.editTimes = state.editTimes || {};
     Object.keys(pendingCellEdits).forEach(function (key) {
-      var value = Number(pendingCellEdits[key].value) || 0;
-      if (value) state.cells[key] = value; else delete state.cells[key];
+      var edit = pendingCellEdits[key];
+      var value = Number(edit.value) || 0;
+      if (value) {
+        state.cells[key] = value;
+        if (edit.editedAt) state.editTimes[key] = edit.editedAt; else delete state.editTimes[key];
+      } else {
+        delete state.cells[key];
+        delete state.editTimes[key];
+      }
     });
   }
   function clearSentCellEdits(sent) {
+    var cleared = false;
     Object.keys(sent).forEach(function (key) {
-      if (pendingCellEdits[key] && pendingCellEdits[key].seq === sent[key].seq) delete pendingCellEdits[key];
+      if (pendingCellEdits[key] && pendingCellEdits[key].seq === sent[key].seq) {
+        delete pendingCellEdits[key];
+        cleared = true;
+      }
     });
+    return cleared;
+  }
+
+  function queueExtraEdit(key, value, notify) {
+    pendingExtraEdits[key] = { value: Number(value) || 0, seq: ++extraEditSequence, notify: !!notify };
+  }
+  function snapshotPendingExtraEdits() {
+    var copy = {};
+    Object.keys(pendingExtraEdits).forEach(function (key) { copy[key] = Object.assign({}, pendingExtraEdits[key]); });
+    return copy;
+  }
+  function replayPendingExtraEdits() {
+    if (!state.extra) state.extra = { expenses: {} };
+    if (!state.extra.expenses) state.extra.expenses = {};
+    Object.keys(pendingExtraEdits).forEach(function (key) {
+      var edit = pendingExtraEdits[key];
+      if (key === 'total') {
+        state.extra.total = edit.value;
+      } else if (key.indexOf('expense|') === 0) {
+        var dateId = key.slice(8);
+        if (edit.value) state.extra.expenses[dateId] = edit.value; else delete state.extra.expenses[dateId];
+        delete state.extra.legacyExpense;
+      }
+    });
+  }
+  function clearSentExtraEdits(sent) {
+    var shouldNotify = false;
+    Object.keys(sent).forEach(function (key) {
+      if (pendingExtraEdits[key] && pendingExtraEdits[key].seq === sent[key].seq) {
+        if (sent[key].notify) shouldNotify = true;
+        delete pendingExtraEdits[key];
+      }
+    });
+    return shouldNotify;
+  }
+  var inputToast = null;
+  var inputToastTimer = null;
+  function showInputToast(message) {
+    if (!inputToast) return;
+    if (inputToastTimer) clearTimeout(inputToastTimer);
+    inputToast.textContent = message || '입력되었습니다';
+    inputToast.classList.remove('hidden');
+    inputToastTimer = setTimeout(function () {
+      inputToast.classList.add('hidden');
+      inputToastTimer = null;
+    }, 1400);
   }
 
   function scheduleServerSave() {
@@ -199,6 +263,7 @@ function baseTotalAmount() {
     isSavingToServer = true;
     var payload = serializeState();
     var sentCellEdits = snapshotPendingCellEdits();
+    var sentExtraEdits = snapshotPendingExtraEdits();
     lastAppliedJson = JSON.stringify(payload);
     fetch('/api/sheet', {
       method: 'PUT',
@@ -213,6 +278,7 @@ function baseTotalAmount() {
         if (res.body.data) {
           state = normalizeState(res.body.data);
           replayPendingCellEdits();
+          replayPendingExtraEdits();
           saveLocal();
           render();
         }
@@ -222,21 +288,31 @@ function baseTotalAmount() {
       }
       if (res.status === 401 || res.status === 403) {
         isSavingToServer = false;
-        if (isAdmin) handleAdminExpired();
-        else if (res.status === 403) {
-          alert('총액·지출 변경 또는 기존 값 삭제는 관리자 로그인이 필요합니다. 서버 최신값으로 다시 맞춥니다.');
-          reloadFromServer().then(function () {
-            if (Object.keys(pendingCellEdits).length) scheduleServerSave();
-          });
+        if (isAdmin) {
+          pendingExtraEdits = {};
+          pendingServerSave = false;
+          handleAdminExpired();
+          reloadFromServer();
+        } else if (res.status === 403) {
+          pendingCellEdits = {};
+          pendingExtraEdits = {};
+          pendingServerSave = false;
+          alert('입력 후 24시간이 지난 타수의 수정·삭제와 총액·지출 변경은 관리자 로그인이 필요합니다. 서버 최신값으로 다시 맞춥니다.');
+          reloadFromServer();
         }
         return;
       }
-      if (res.body && res.body.ok) { serverRev = res.body.rev || serverRev; clearSentCellEdits(sentCellEdits); }
+      if (res.body && res.body.ok) {
+        serverRev = res.body.rev || serverRev;
+        var shouldConfirmInput = clearSentCellEdits(sentCellEdits);
+        if (clearSentExtraEdits(sentExtraEdits)) shouldConfirmInput = true;
+        if (shouldConfirmInput) showInputToast('입력되었습니다');
+      }
       isSavingToServer = false;
-      if (pendingServerSave || Object.keys(pendingCellEdits).length) { pendingServerSave = false; scheduleServerSave(); }
+      if (pendingServerSave || Object.keys(pendingCellEdits).length || Object.keys(pendingExtraEdits).length) { pendingServerSave = false; scheduleServerSave(); }
     }).catch(function () {
       isSavingToServer = false; // 오프라인이면 완료된 타수는 로컬에 유지하고 잠시 뒤 재시도
-      if (Object.keys(pendingCellEdits).length) setTimeout(scheduleServerSave, 1500);
+      if (Object.keys(pendingCellEdits).length || Object.keys(pendingExtraEdits).length) setTimeout(scheduleServerSave, 1500);
     });
   }
 
@@ -268,6 +344,7 @@ function baseTotalAmount() {
     if (isEditing()) { pendingServerData = d; return; }
     state = normalizeState(d);
     replayPendingCellEdits();
+    replayPendingExtraEdits();
     saveLocal();
     render();
     renderAdmin && renderAdmin();
@@ -345,15 +422,42 @@ function baseTotalAmount() {
   }
   function dateTotal(id) { var s = 0; state.members.forEach(function (m) { s += Number(state.cells[cellKey(m.id, id)]) || 0; }); return s; }
   function grandTotal() { var s = 0; state.members.forEach(function (m) { s += memberTotal(m.id); }); return s; }
+  function priorDatesForTieBreak(dateId) {
+    var selected = findDate(dateId);
+    if (!selected) return [];
+    return state.dates.filter(function (d) { return d.iso < selected.iso; })
+      .sort(function (a, b) { return b.iso.localeCompare(a.iso); });
+  }
+  function compareMembersForDate(a, b, dateId) {
+    var scoreA = Number(state.cells[cellKey(a.id, dateId)]) || 0;
+    var scoreB = Number(state.cells[cellKey(b.id, dateId)]) || 0;
+    if (!scoreA && !scoreB) return state.members.indexOf(a) - state.members.indexOf(b);
+    if (!scoreA) return 1;
+    if (!scoreB) return -1;
+    if (scoreA !== scoreB) return scoreA - scoreB;
+    var attendanceDiff = memberParticipationCount(b.id) - memberParticipationCount(a.id);
+    if (attendanceDiff) return attendanceDiff;
+    var previousDates = priorDatesForTieBreak(dateId);
+    for (var i = 0; i < previousDates.length; i++) {
+      var previousA = Number(state.cells[cellKey(a.id, previousDates[i].id)]) || 0;
+      var previousB = Number(state.cells[cellKey(b.id, previousDates[i].id)]) || 0;
+      if (!previousA && previousB) return 1;
+      if (previousA && !previousB) return -1;
+      if (previousA !== previousB) return previousA - previousB;
+    }
+    return state.members.indexOf(a) - state.members.indexOf(b);
+  }
+  function membersByDateRank(dateId) {
+    return state.members.slice().sort(function (a, b) { return compareMembersForDate(a, b, dateId); });
+  }
   function rankFor(memberId, dateId) {
     var score = Number(state.cells[cellKey(memberId, dateId)]) || 0;
     if (!score) return '';
-    var lower = 0;
-    state.members.forEach(function (m) {
-      var other = Number(state.cells[cellKey(m.id, dateId)]) || 0;
-      if (other > 0 && other < score) lower++;
+    var ranked = membersByDateRank(dateId).filter(function (m) {
+      return (Number(state.cells[cellKey(m.id, dateId)]) || 0) > 0;
     });
-    return lower + 1;
+    for (var i = 0; i < ranked.length; i++) if (ranked[i].id === memberId) return i + 1;
+    return '';
   }
   function dateBestScore(dateId) {
     var best = 0;
@@ -364,24 +468,12 @@ function baseTotalAmount() {
     return best;
   }
   function dateWinnerNames(dateId) {
-    var best = dateBestScore(dateId);
-    if (!best) return '';
-    var winner = state.members.map(function (m, index) {
-      return {
-        member: m,
-        index: index,
-        score: Number(state.cells[cellKey(m.id, dateId)]) || 0,
-        participatedDays: memberParticipationCount(m.id)
-      };
-    }).filter(function (x) {
-      return x.score === best && (x.member.name || '').trim();
-    }).sort(function (a, b) {
-      return b.participatedDays - a.participatedDays || a.index - b.index;
+    var winner = membersByDateRank(dateId).filter(function (m) {
+      return (Number(state.cells[cellKey(m.id, dateId)]) || 0) > 0 && (m.name || '').trim();
     })[0];
     if (!winner) return '';
-    return Array.from((winner.member.name || '').trim()).slice(0, 3).join('');
-  }
-  function averageWinnerName() {
+    return Array.from((winner.name || '').trim()).slice(0, 3).join('');
+  }  function averageWinnerName() {
     var winner = membersByAverage().filter(function (m) {
       return memberParticipationCount(m.id) > 0 && (m.name || '').trim();
     })[0];
@@ -501,7 +593,11 @@ function baseTotalAmount() {
   }
 
   var _vd = { visible: [], hiddenCount: 0, hiddenIds: [] }; // 마지막 계산 결과 캐시
-
+  var memberSortMode = { type: 'average', dateId: '' };
+  function membersForDisplay() {
+    if (memberSortMode.type === 'date' && findDate(memberSortMode.dateId)) return membersByDateRank(memberSortMode.dateId);
+    return membersByAverage();
+  }
   function renderHead() {
     var h = '<tr class="date-group-row">';
     h += '<th class="col-no" rowspan="2">No</th>';
@@ -511,7 +607,7 @@ function baseTotalAmount() {
       h += '<th class="col-fold" rowspan="2" title="숨겨진 날짜 ' + _vd.hiddenCount + '개 · 눌러서 전체 펼치기"><div class="fold-head"><span class="fold-dots">···</span><span class="fold-cnt">+' + _vd.hiddenCount + '일</span></div></th>';
     }
     _vd.visible.forEach(function (d) {
-      h += '<th class="col-date-group" colspan="2"><div class="date-head"><span class="date-text">' + fmtDate(d.iso) + '</span><span class="date-sub">' + fmtDateFull(d.iso) + '</span>' + (isAdmin ? '<button class="date-del" data-del-date="' + d.id + '" title="이 날짜 삭제"><i class="fas fa-xmark"></i></button>' : '') + '</div></th>';
+      h += '<th class="col-date-group" colspan="2"><div class="date-head"><span class="date-text">' + fmtDate(d.iso) + '</span><span class="date-sub">' + fmtDateFull(d.iso) + '</span><button type="button" class="date-sort-btn" data-sort-date="' + d.id + '" title="이 날짜 순위대로 회원 행 정렬">정렬</button>' + (isAdmin ? '<button class="date-del" data-del-date="' + d.id + '" title="이 날짜 삭제"><i class="fas fa-xmark"></i></button>' : '') + '</div></th>';
     });
     h += '</tr><tr class="date-sub-row">';
     _vd.visible.forEach(function (d) {
@@ -529,7 +625,7 @@ function baseTotalAmount() {
 
   function renderBody() {
     var h = '';
-    membersByAverage().forEach(function (m, idx) {
+    membersForDisplay().forEach(function (m, idx) {
       h += '<tr>';
       h += '<td class="cell-no">' + (idx + 1) + (isAdmin ? '<button class="row-del" data-del-member="' + m.id + '" title="이 회원 행 삭제"><i class="fas fa-xmark"></i></button>' : '') + '</td>';
       h += '<td class="cell-name" data-col="name"' + wStyle('name') + '><input type="text" maxlength="4" class="' + inputCls('name-input', !!m.name) + '" data-name="' + m.id + '" value="' + escapeHtml(m.name) + '" placeholder="이름4자" /></td>';
@@ -563,7 +659,7 @@ function baseTotalAmount() {
     if (_vd.hiddenCount > 0) h += '<td class="foot-extra-filler"></td>';
     _vd.visible.forEach(function (d) {
       var ex = expenseFor(d.id);
-      h += '<td colspan="2" class="foot-extra-cell foot-date-value"><input type="text" inputmode="numeric" pattern="[0-9]*" class="extra-input' + (ex ? ' has-val' : '') + (isAdmin ? '' : ' locked') + '" data-expense-date="' + d.id + '" value="' + (ex ? fmt(ex) : '') + '" placeholder="0"' + (isAdmin ? '' : ' readonly aria-readonly="true"') + ' /></td>';
+      h += '<td colspan="2" class="foot-extra-cell foot-date-value"><input type="text" inputmode="none" readonly class="extra-input' + (ex ? ' has-val' : '') + (isAdmin ? '' : ' locked') + '" data-expense-date="' + d.id + '" value="' + (ex ? fmt(ex) : '') + '" placeholder="0"' + (isAdmin ? '' : ' aria-readonly="true"') + ' /></td>';
     });
     h += '</tr>';
 
@@ -615,8 +711,12 @@ function baseTotalAmount() {
   function findDate(id) { for (var i = 0; i < state.dates.length; i++) if (state.dates[i].id === id) return state.dates[i]; return null; }
 
   head.addEventListener('click', function (e) {
-    var sortButton = e.target.closest('[data-sort-average]');
-    if (!sortButton) return;
+    var averageSortButton = e.target.closest('[data-sort-average]');
+    var dateSortButton = e.target.closest('[data-sort-date]');
+    if (!averageSortButton && !dateSortButton) return;
+    memberSortMode = dateSortButton
+      ? { type: 'date', dateId: dateSortButton.getAttribute('data-sort-date') }
+      : { type: 'average', dateId: '' };
     renderBody();
     applyWidths();
     var tableWrap = document.getElementById('table-wrap');
@@ -636,7 +736,7 @@ function baseTotalAmount() {
       if (m1) { m1.name = t.value; save(); }
     }
   });
-  // 잔액(자동 계산: 날짜별 합계 - 지출액)을 실시간 갱신 (표 안 tfoot 셀)
+  // 잔액(자동 계산: 총액 - 해당 날짜까지의 누적 지출)을 실시간 갱신 (표 안 tfoot 셀)
   function refreshBalance() {
     state.dates.forEach(function (d) {
       var el = foot.querySelector('[data-balance-date="' + d.id + '"]');
@@ -654,27 +754,144 @@ function baseTotalAmount() {
   //   1) 입력 중에는 서버 저장을 걸지 않음 → 409/applyServerData→render 연쇄 없음(DOM 안 갈아엎음)
   //   2) 입력 중 render 는 pendingServerData 로 미룸(isEditing 방어) → 입력칸 파괴 안 됨
   //   3) 실시간 천단위 콤마 + 커서 보정
+  var expensePad = document.getElementById('expense-quick-pad');
+  var expenseQuickCur = document.getElementById('expense-quick-cur');
+  var expenseQuickLabel = document.getElementById('expense-quick-label');
+  var expenseTarget = null;
+  var expenseDraft = '';
+  var expenseReplaceOnNextDigit = true;
+
+  function savedExpenseValue(t) {
+    return t ? expenseFor(t.getAttribute('data-expense-date')) : 0;
+  }
+  function updateExpenseQuickPreview() {
+    if (!expenseTarget) return;
+    var value = parseNum(expenseDraft);
+    expenseTarget.value = value ? fmt(value) : '';
+    expenseTarget.classList.toggle('has-val', !!value);
+    expenseQuickCur.textContent = value ? fmt(value) : '0';
+  }
+  function keepExpenseTargetVisible(t) {
+    var wrap = document.getElementById('table-wrap');
+    if (!wrap || window.innerWidth > 900) return;
+    var r = t.getBoundingClientRect();
+    var openAreaRight = window.innerWidth - expensePad.offsetWidth - 18;
+    if (r.right > openAreaRight) wrap.scrollLeft += (r.right - openAreaRight + 8);
+  }  function positionExpenseQuickPad(t) {
+    if (!t || expensePad.classList.contains('hidden')) return;
+    var r = t.getBoundingClientRect();
+    var padH = expensePad.offsetHeight || 230;
+    var header = document.getElementById('app-header');
+    var minTop = header ? Math.ceil(header.getBoundingClientRect().bottom + 6) : 8;
+    var maxTop = Math.max(minTop, window.innerHeight - padH - 8);
+    var top = Math.max(minTop, Math.min(maxTop, r.top + (r.height / 2) - (padH / 2)));
+    expensePad.style.left = 'auto';
+    expensePad.style.right = '8px';
+    expensePad.style.top = top + 'px';
+  }
+  function openExpenseQuickPad(t) {
+    if (!isAdmin || !t) return;
+    if (qpTarget) closeQuickPad(false);
+    if (expenseTarget && expenseTarget !== t) closeExpenseQuickPad(false);
+    expenseTarget = t;
+    var current = savedExpenseValue(t);
+    expenseDraft = current ? String(current) : '';
+    expenseReplaceOnNextDigit = true;
+    var date = findDate(t.getAttribute('data-expense-date'));
+    expenseQuickLabel.textContent = (date ? fmtDateFull(date.iso) : '날짜') + ' · 지출';
+    expensePad.classList.remove('hidden');
+    keepExpenseTargetVisible(t);
+    positionExpenseQuickPad(t);
+    updateExpenseQuickPreview();
+  }
+  function enterExpensePreset(value) {
+    if (!expenseTarget) return;
+    expenseDraft = String(Math.max(0, Number(value) || 0));
+    expenseReplaceOnNextDigit = true;
+    updateExpenseQuickPreview();
+  }
+  function enterExpenseDigit(digit) {
+    if (!expenseTarget || !/^[0-9]$/.test(String(digit))) return;
+    var next = expenseReplaceOnNextDigit ? String(digit) : (expenseDraft + String(digit));
+    expenseReplaceOnNextDigit = false;
+    expenseDraft = next.replace(/^0+(?=\d)/, '').slice(0, 9);
+    updateExpenseQuickPreview();
+  }
+  function clearExpenseDraft() {
+    if (!expenseTarget) return;
+    expenseDraft = '';
+    expenseReplaceOnNextDigit = true;
+    updateExpenseQuickPreview();
+  }
+  function closeExpenseQuickPad(committed) {
+    if (expenseTarget && !committed) {
+      var original = savedExpenseValue(expenseTarget);
+      expenseTarget.value = original ? fmt(original) : '';
+      expenseTarget.classList.toggle('has-val', !!original);
+    }
+    expensePad.classList.add('hidden');
+    expenseTarget = null;
+    expenseDraft = '';
+    expenseReplaceOnNextDigit = true;
+  }
+  function completeExpenseQuickPad() {
+    if (!expenseTarget || !isAdmin) return;
+    var target = expenseTarget;
+    var dateId = target.getAttribute('data-expense-date');
+    var previous = savedExpenseValue(target);
+    var value = Math.max(0, parseNum(expenseDraft));
+    if (value !== previous) {
+      if (!state.extra) state.extra = { expenses: {} };
+      if (!state.extra.expenses) state.extra.expenses = {};
+      if (value) state.extra.expenses[dateId] = value; else delete state.extra.expenses[dateId];
+      delete state.extra.legacyExpense;
+      queueExtraEdit('expense|' + dateId, value, true);
+      saveLocal();
+      scheduleServerSave();
+    } else {
+      showInputToast('입력되었습니다');
+    }
+    closeExpenseQuickPad(true);
+    target.value = value ? fmt(value) : '';
+    target.classList.toggle('has-val', !!value);
+    refreshBalance();
+  }
+
+  expensePad.addEventListener('mousedown', function (e) { e.preventDefault(); });
+  expensePad.addEventListener('click', function (e) {
+    var preset = e.target.closest('[data-expense-value]');
+    if (preset) enterExpensePreset(preset.getAttribute('data-expense-value'));
+    else if (e.target.closest('[data-expense-clear]')) clearExpenseDraft();
+    else if (e.target.closest('[data-expense-done]')) completeExpenseQuickPad();
+  });
+  document.addEventListener('mousedown', function (e) {
+    if (expensePad.classList.contains('hidden')) return;
+    if (e.target.closest('#expense-quick-pad')) return;
+    if (expenseTarget && e.target === expenseTarget) return;
+    closeExpenseQuickPad(false);
+  });
+
   foot.addEventListener('focus', function (e) {
     var t = e.target; if (!t.matches('.extra-input') || !isAdmin) return;
     t.dataset.originalValue = t.value;
+    if (t.hasAttribute('data-expense-date')) {
+      openExpenseQuickPad(t);
+      return;
+    }
     setTimeout(function () { try { t.select(); } catch (x) {} }, 0);
   }, true);
   foot.addEventListener('input', function (e) {
     var t = e.target; if (!t.matches('.extra-input') || !isAdmin) return;
-    var num = parseNum(t.value); // 콤마·비숫자 무시, 숫자만
-
-    if (num < 0) num = 0;
-    if (!state.extra) state.extra = { expenses: {} };
-    if (t.hasAttribute('data-total-amount')) {
-      state.extra.total = num;
-    } else {
-      if (!state.extra.expenses) state.extra.expenses = {};
-      var expenseDateId = t.getAttribute('data-expense-date');
-      state.extra.expenses[expenseDateId] = num;
-      delete state.extra.legacyExpense;
+    if (t.hasAttribute('data-expense-date')) {
+      expenseDraft = String(parseNum(t.value) || '');
+      expenseReplaceOnNextDigit = false;
+      updateExpenseQuickPreview();
+      return;
     }
+    var num = Math.max(0, parseNum(t.value));
+    if (!state.extra) state.extra = { expenses: {} };
+    state.extra.total = num;
     t.classList.toggle('has-val', !!num);
-    // ── 입력 중 실시간 천단위 콤마 + 커서 보정 ──
     var before = t.value;
     var caret = t.selectionStart == null ? before.length : t.selectionStart;
     var digitsBeforeCaret = before.slice(0, caret).replace(/[^\d]/g, '').length;
@@ -686,24 +903,43 @@ function baseTotalAmount() {
       pos++;
     }
     try { t.setSelectionRange(pos, pos); } catch (x) {}
-    refreshBalance();      // 잔액 즉시 갱신
-    saveLocal();           // 로컬에만 즉시 저장 (서버 저장은 blur 때)
+    refreshBalance();
+    saveLocal();
+  });
+  foot.addEventListener('keydown', function (e) {
+    var t = e.target; if (!t.matches('[data-expense-date]') || !isAdmin) return;
+    if (/^[0-9]$/.test(e.key)) { e.preventDefault(); enterExpenseDigit(e.key); }
+    else if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); clearExpenseDraft(); }
+    else if (e.key === 'Enter') { e.preventDefault(); completeExpenseQuickPad(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeExpenseQuickPad(false); }
   });
   foot.addEventListener('blur', function (e) {
     var t = e.target; if (!t.matches('.extra-input') || !isAdmin) return;
+    if (t.hasAttribute('data-expense-date')) {
+      setTimeout(function () {
+        if (expenseTarget === t && document.activeElement !== t) closeExpenseQuickPad(false);
+      }, 0);
+      return;
+    }
     var num = parseNum(t.value);
-    t.value = num ? fmt(num) : '';            // 콤마 표기 정리
-    scheduleServerSave();                     // 입력 완료 후에만 서버 저장
-    setTimeout(flushPendingServerData, 50);   // 미뤄둔 서버 데이터 반영
+    var original = parseNum(t.dataset.originalValue);
+    t.value = num ? fmt(num) : '';
+    if (num !== original) {
+      queueExtraEdit('total', num, false);
+      scheduleServerSave();
+    }
+    setTimeout(flushPendingServerData, 50);
   }, true);
-
+  window.addEventListener('resize', function () {
+    if (expenseTarget) positionExpenseQuickPad(expenseTarget);
+  });
   body.addEventListener('focus', function (e) {
     var t = e.target;
     if (t.matches('.name-input, .money-input')) t.dataset.originalValue = t.value;
     if (!t.matches('.money-input')) return;
     var num = parseNum(t.value); t.value = num ? String(num) : '';
     setTimeout(function () { try { t.select(); } catch (x) {} }, 0);
-    openQuickPad(t); // 0~9 빠른 타수 숫자판 표시
+    openQuickPad(t); // 자주 쓰는 타수 빠른입력 도우미 표시
   }, true);
   body.addEventListener('blur', function (e) {
     var t = e.target; if (!t.matches('.money-input')) return;
@@ -719,7 +955,7 @@ function baseTotalAmount() {
     var t = e.target;
     if (t.matches('.money-input')) {
       if (/^[0-9]$/.test(e.key)) { e.preventDefault(); enterQuickDigit(e.key); }
-      else if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); eraseQuickDigit(); }
+      else if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); clearQuickDraft(); }
       else if (e.key === 'Enter') { e.preventDefault(); completeQuickPad(); }
       else if (e.key === 'Escape') { e.preventDefault(); closeQuickPad(false); }
       return;
@@ -740,10 +976,11 @@ function baseTotalAmount() {
     if (el) { el.focus(); try { el.select(); } catch (x) {} }
   });
 
-  // ---------- 0~9 타수 빠른입력 숫자판 ----------
+  // ---------- 자주 쓰는 타수 빠른입력 도우미 ----------
   var quickPad = document.getElementById('quick-pad');
   var quickCur = document.getElementById('quick-cur');
   var quickLabel = document.getElementById('quick-label');
+  inputToast = document.getElementById('input-toast');
   var qpTarget = null;
   var qpDraft = '';
   var qpReplaceOnNextDigit = true;
@@ -773,6 +1010,7 @@ function baseTotalAmount() {
 
   function openQuickPad(t) {
     if (!qpCanEdit(t)) return;
+    if (expenseTarget) closeExpenseQuickPad(false);
     if (qpTarget && qpTarget !== t) closeQuickPad(false);
     qpTarget = t;
     var current = savedQuickValue(t);
@@ -810,14 +1048,18 @@ function baseTotalAmount() {
     updateQuickPreview();
   }
 
-  function eraseQuickDigit() {
+  function enterQuickScore(score) {
     if (!qpTarget) return;
-    if (qpReplaceOnNextDigit) {
-      qpDraft = '';
-      qpReplaceOnNextDigit = false;
-    } else {
-      qpDraft = qpDraft.slice(0, -1);
-    }
+    var value = Math.min(MAX_SCORE, Math.max(0, Number(score) || 0));
+    qpDraft = value ? String(value) : '';
+    qpReplaceOnNextDigit = true;
+    updateQuickPreview();
+  }
+
+  function clearQuickDraft() {
+    if (!qpTarget) return;
+    qpDraft = '';
+    qpReplaceOnNextDigit = true;
     updateQuickPreview();
   }
 
@@ -833,14 +1075,20 @@ function baseTotalAmount() {
     qpReplaceOnNextDigit = true;
   }
 
+  function scoreEditExpiredForUser(key, previous) {
+    if (isAdmin || !previous) return false;
+    var editedAt = Number(state.editTimes && state.editTimes[key]) || 0;
+    return !editedAt || Date.now() - editedAt >= (24 * 60 * 60 * 1000);
+  }
   function completeQuickPad() {
     if (!qpTarget) return;
     var target = qpTarget;
     var key = cellKey(target.getAttribute('data-m'), target.getAttribute('data-d'));
     var previous = Number(state.cells[key]) || 0;
     var value = Math.min(MAX_SCORE, Math.max(0, parseNum(qpDraft)));
-    if (!isAdmin && previous && !value) {
-      alert('기존 타수 삭제는 관리자만 할 수 있습니다.');
+
+    if (value !== previous && scoreEditExpiredForUser(key, previous)) {
+      alert('입력 후 24시간이 지난 타수는 관리자 모드에서만 수정할 수 있습니다.');
       qpDraft = String(previous);
       qpReplaceOnNextDigit = true;
       updateQuickPreview();
@@ -848,9 +1096,11 @@ function baseTotalAmount() {
     }
     if (value !== previous) {
       if (value) state.cells[key] = value; else delete state.cells[key];
-      queueCellEdit(key, value);
+      queueCellEdit(key, value, previous);
       saveLocal();
       scheduleServerSave();
+    } else {
+      showInputToast('입력되었습니다');
     }
     closeQuickPad(true);
     renderBody();
@@ -860,11 +1110,11 @@ function baseTotalAmount() {
 
   quickPad.addEventListener('mousedown', function (e) { e.preventDefault(); });
   quickPad.addEventListener('click', function (e) {
-    var digit = e.target.closest('[data-digit]');
+    var score = e.target.closest('[data-score]');
     var clear = e.target.closest('[data-clear]');
     var done = e.target.closest('.qp-done');
-    if (digit) enterQuickDigit(digit.getAttribute('data-digit'));
-    else if (clear) eraseQuickDigit();
+    if (score) enterQuickScore(score.getAttribute('data-score'));
+    else if (clear) clearQuickDraft();
     else if (done) completeQuickPad();
   });
   // 숫자판 밖을 누르면 임시값을 취소한다. 완료를 눌러야만 저장된다.
@@ -1137,8 +1387,11 @@ function baseTotalAmount() {
   function endAdminSession(showMessage) {
     isAdmin = false;
     adminToken = '';
+    if (expenseTarget) closeExpenseQuickPad(false);
+    if (qpTarget) closeQuickPad(false);
     updateAdminBtn();
     if (viewAdmin && !viewAdmin.classList.contains('hidden')) closeAdmin();
+    else render();
     if (showMessage) alert('관리자 인증이 만료되었습니다. 다시 로그인해 주세요.');
   }
 
@@ -1160,7 +1413,7 @@ function baseTotalAmount() {
         banner.innerHTML = '<i class="fas fa-lock-open"></i><span class="mode-banner-text">관리자 모드 · 모든 값을 <b>수정·삭제</b>할 수 있습니다</span>';
       } else {
         banner.className = 'mode-banner mode-user';
-        banner.innerHTML = '<i class="fas fa-pen"></i><span class="mode-banner-text">일반 사용자 모드 · 회원이름과 타수는 <b>입력·수정</b>할 수 있습니다. 총액·날짜별 지출과 모든 삭제는 관리자만 가능합니다.</span>';
+        banner.innerHTML = '<i class="fas fa-pen"></i><span class="mode-banner-text">일반 사용자 모드 · 타수는 입력 후 <b>24시간 안에 수정·지움</b>할 수 있습니다. 이후 수정·삭제와 총액·날짜별 지출은 관리자만 가능합니다.</span>';
       }
     }
   }
@@ -1222,7 +1475,7 @@ function baseTotalAmount() {
   // 관리자 로그아웃
   document.getElementById('btn-logout').addEventListener('click', function () {
     endAdminSession(false);
-    alert('관리자 모드를 종료했습니다. 이제 일반 사용자(입력만 가능) 상태입니다.');
+    alert('관리자 모드를 종료했습니다. 타수는 입력 후 24시간 안에만 수정·지움할 수 있습니다.');
   });
 
   function updateAssetCount() {

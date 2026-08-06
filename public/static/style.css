@@ -215,6 +215,13 @@ html, body {
   cursor: pointer;
 }
 .average-sort-btn:active { transform: translateY(1px); background: #ffe88c; }
+.date-sort-btn {
+  border: 1px solid rgba(255,255,255,.65); border-radius: 6px;
+  padding: 1px 7px; margin-top: 2px;
+  background: #fff7cf; color: #3a2a00;
+  font-size: 9px; font-weight: 900; line-height: 1.2; cursor: pointer;
+}
+.date-sort-btn:active { transform: translateY(1px); background: #ffe88c; }
 
 .date-head { display: flex; flex-direction: column; align-items: center; gap: 0; position: relative; }
 .date-head .date-text { font-size: 14px; font-weight: 800; }
@@ -565,7 +572,7 @@ html, body {
   border-radius: 50%; background: #fff; border: none; cursor: pointer; font-size: 16px; color: var(--text);
 }
 
-/* ===== 0~9 타수 빠른입력 숫자판: 화면 오른쪽 고정 ===== */
+/* ===== 자주 쓰는 타수 빠른입력 도우미: 화면 오른쪽 고정 ===== */
 .quick-pad {
   position: fixed; right: 8px; left: auto; z-index: 90;
   width: 184px;
@@ -600,7 +607,24 @@ html, body {
 .qp-btn:active { transform: scale(.93); }
 .qp-clear { background: #ffe0e0; color: var(--red); font-size: 12px; }
 .qp-done { background: var(--green); color: #fff; font-size: 12px; }
+.qp-wide { grid-column: span 2; }
+.expense-preset { font-size: 14px; }
 .qp-clear i, .qp-done i { display: block; margin-bottom: 2px; }
+.input-toast {
+  position: fixed; left: 50%; bottom: max(22px, env(safe-area-inset-bottom)); z-index: 120;
+  transform: translateX(-50%);
+  padding: 10px 18px; border-radius: 999px;
+  background: rgba(15, 81, 50, .94); color: #fff;
+  font-size: 14px; font-weight: 800; white-space: nowrap;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .22);
+  pointer-events: none;
+  animation: input-toast-show 1.4s ease both;
+}
+@keyframes input-toast-show {
+  0% { opacity: 0; transform: translate(-50%, 8px); }
+  14%, 78% { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, -4px); }
+}
 .hidden { display: none !important; }
 
 /* ===== 좁은 컬럼 폭: 900px 이하 모든 기기(큰 폰·가로화면·태블릿 포함) =====
@@ -720,6 +744,7 @@ html, body {
   }
   .date-head .date-text { font-size: 11.5px; }
   .date-head .date-sub { font-size: 8.5px; }
+  .date-sort-btn { padding: 1px 5px; font-size: 8px; }
   .date-head .date-lost { font-size: 8px; padding: 1px 3px; }
   .cell-money input { font-size: 11.5px; padding: clamp(5px, .8dvh, 7px) 1px; }
   .cell-name input { font-size: 10.5px; padding: clamp(5px, .8dvh, 7px) 1px; }
