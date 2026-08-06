@@ -211,9 +211,11 @@ function isSheetData(value: unknown): value is SheetData {
         typeof editedAt === 'number' && Number.isFinite(editedAt) && editedAt >= 0
       )
     }
-    const isNested = Object.prototype.hasOwnProperty.call(editRoot, 'cells') || Object.prototype.hasOwnProperty.call(editRoot, 'names')
+    const isNested = Object.prototype.hasOwnProperty.call(editRoot, 'cells') ||
+      Object.prototype.hasOwnProperty.call(editRoot, 'names') ||
+      Object.prototype.hasOwnProperty.call(editRoot, 'expenses')
     if (isNested) {
-      if (!validateTimes(editRoot.cells) || !validateTimes(editRoot.names)) return false
+      if (!validateTimes(editRoot.cells) || !validateTimes(editRoot.names) || !validateTimes(editRoot.expenses)) return false
     } else if (!validateTimes(editRoot)) return false
   }
   return true
@@ -241,8 +243,24 @@ function recordValue(value: unknown): Record<string, unknown> {
 
 function cellEditTimes(value: unknown): Record<string, unknown> {
   const root = recordValue(value)
-  const isNested = Object.prototype.hasOwnProperty.call(root, 'cells') || Object.prototype.hasOwnProperty.call(root, 'names')
+  const isNested = Object.prototype.hasOwnProperty.call(root, 'cells') ||
+    Object.prototype.hasOwnProperty.call(root, 'names') ||
+    Object.prototype.hasOwnProperty.call(root, 'expenses')
   return isNested ? recordValue(root.cells) : root
+}
+
+function expenseEditTimes(value: unknown): Record<string, unknown> {
+  return recordValue(recordValue(value).expenses)
+}
+
+function effectiveExpenses(value: SheetData | null): Record<string, unknown> {
+  const extra = recordValue(value?.extra)
+  const result = { ...recordValue(extra.expenses) }
+  const latest = value?.dates.slice().sort((left, right) => (right.iso || '').localeCompare(left.iso || ''))[0]
+  if (latest && !isMeaningfulValue(result[latest.id]) && isMeaningfulValue(extra.legacyExpense)) {
+    result[latest.id] = extra.legacyExpense
+  }
+  return result
 }
 
 function changesExpiredScore(current: SheetData, next: SheetData, now = Date.now()): boolean {
@@ -256,6 +274,29 @@ function changesExpiredScore(current: SheetData, next: SheetData, now = Date.now
   })
 }
 
+function changesExpiredExpense(current: SheetData, next: SheetData, now = Date.now()): boolean {
+  const currentExpenses = effectiveExpenses(current)
+  const nextExpenses = effectiveExpenses(next)
+  const editTimes = expenseEditTimes(current.editTimes)
+  const keys = new Set([...Object.keys(currentExpenses), ...Object.keys(nextExpenses)])
+  return [...keys].some((dateId) => {
+    if (currentExpenses[dateId] === nextExpenses[dateId]) return false
+    if (!isMeaningfulValue(currentExpenses[dateId])) return false
+    const editedAt = Number(editTimes[dateId])
+    return !Number.isFinite(editedAt) || editedAt <= 0 || now - editedAt >= SCORE_EDIT_WINDOW_MS
+  })
+}
+
+function changesAdminOnlyExtra(current: SheetData, next: SheetData): boolean {
+  const before = { ...recordValue(current.extra) }
+  const after = { ...recordValue(next.extra) }
+  delete before.expenses
+  delete after.expenses
+  delete before.legacyExpense
+  delete after.legacyExpense
+  return JSON.stringify(before) !== JSON.stringify(after)
+}
+
 function stampCellEditTimes(current: SheetData | null, next: SheetData, now = Date.now()): SheetData {
   const currentCells = recordValue(current?.cells)
   const nextCells = recordValue(next.cells)
@@ -263,8 +304,10 @@ function stampCellEditTimes(current: SheetData | null, next: SheetData, now = Da
   const nextEditRoot = recordValue(next.editTimes)
   const usesNestedTimes = Object.prototype.hasOwnProperty.call(currentEditRoot, 'cells') ||
     Object.prototype.hasOwnProperty.call(currentEditRoot, 'names') ||
+    Object.prototype.hasOwnProperty.call(currentEditRoot, 'expenses') ||
     Object.prototype.hasOwnProperty.call(nextEditRoot, 'cells') ||
-    Object.prototype.hasOwnProperty.call(nextEditRoot, 'names')
+    Object.prototype.hasOwnProperty.call(nextEditRoot, 'names') ||
+    Object.prototype.hasOwnProperty.call(nextEditRoot, 'expenses')
   const currentTimes = usesNestedTimes ? recordValue(currentEditRoot.cells) : currentEditRoot
   const stampedTimes = { ...(usesNestedTimes ? recordValue(nextEditRoot.cells) : nextEditRoot) }
   const keys = new Set([...Object.keys(currentCells), ...Object.keys(nextCells)])
@@ -282,7 +325,26 @@ function stampCellEditTimes(current: SheetData | null, next: SheetData, now = Da
       stampedTimes[key] = now
     }
   })
-  const editTimes = usesNestedTimes ? { ...nextEditRoot, cells: stampedTimes } : stampedTimes
+  const currentExpenses = effectiveExpenses(current)
+  const nextExpenses = effectiveExpenses(next)
+  const currentExpenseTimes = expenseEditTimes(current?.editTimes)
+  const stampedExpenseTimes = { ...recordValue(nextEditRoot.expenses) }
+  const expenseKeys = new Set([...Object.keys(currentExpenses), ...Object.keys(nextExpenses)])
+  expenseKeys.forEach((dateId) => {
+    if (!isMeaningfulValue(nextExpenses[dateId])) {
+      delete stampedExpenseTimes[dateId]
+      return
+    }
+    const previousTime = Number(currentExpenseTimes[dateId])
+    if (isMeaningfulValue(currentExpenses[dateId])) {
+      // 기존 값의 최초 입력 시각을 유지한다. 시각이 없는 과거 값은 계속 관리자만 수정한다.
+      if (Number.isFinite(previousTime) && previousTime > 0) stampedExpenseTimes[dateId] = previousTime
+      else delete stampedExpenseTimes[dateId]
+    } else {
+      stampedExpenseTimes[dateId] = now
+    }
+  })
+  const editTimes = { ...nextEditRoot, cells: stampedTimes, expenses: stampedExpenseTimes }
   return { ...next, editTimes }
 }
 function requiresAdminForSheetChange(current: SheetData | null, next: SheetData): boolean {
@@ -297,8 +359,9 @@ function requiresAdminForSheetChange(current: SheetData | null, next: SheetData)
     if (isMeaningfulValue(member.name) && !isMeaningfulValue(nextMember.name)) return true
   }
   if (changesExpiredScore(current, next)) return true
-  // 총액과 날짜별 지출은 값 추가·수정·삭제 모두 관리자만 허용한다.
-  if (JSON.stringify(current.extra ?? null) !== JSON.stringify(next.extra ?? null)) return true
+  if (changesExpiredExpense(current, next)) return true
+  // 총액과 알 수 없는 정산 필드는 관리자만 변경한다. 날짜별 지출은 최초 입력 후 24시간 동안 일반 사용자도 변경할 수 있다.
+  if (changesAdminOnlyExtra(current, next)) return true
   if (removesNestedValue(current.manager, next.manager)) return true
   return JSON.stringify(current.labels ?? null) !== JSON.stringify(next.labels ?? null)
 }
@@ -550,7 +613,7 @@ app.get('/', (c) => {
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⛳</text></svg>">
   <title>사보회</title>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
-  <link href="/static/style.css?v=20260806a1" rel="stylesheet">
+  <link href="/static/style.css?v=20260806e1" rel="stylesheet">
 </head>
 <body>
   <header class="app-header" id="app-header">
@@ -569,7 +632,7 @@ app.get('/', (c) => {
 
   <main class="app-main" id="view-sheet">
     <div id="mode-banner" class="mode-banner mode-user">
-      <i class="fas fa-pen"></i><span class="mode-banner-text">일반 사용자 모드 · 회원이름과 타수는 <b>입력·수정</b>할 수 있습니다. 총액·날짜별 지출과 모든 삭제는 관리자만 가능합니다.</span>
+      <i class="fas fa-pen"></i><span class="mode-banner-text">일반 사용자 모드 · 타수와 날짜별 지출은 입력 후 <b>24시간 안에 수정·지움</b>할 수 있습니다. 이후 변경과 총액 입력은 관리자만 가능합니다.</span>
     </div>
     <div class="table-wrap" id="table-wrap">
       <table id="sheet" class="sheet">
@@ -712,7 +775,7 @@ app.get('/', (c) => {
     </div>
   </div>
 
-  <script src="/static/app.js?v=20260806d1"></script>
+  <script src="/static/app.js?v=20260806e1"></script>
 </body>
 </html>`)
 })

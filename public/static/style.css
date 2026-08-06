@@ -149,6 +149,8 @@ html, body {
 .app-main { padding: 8px 10px 10px; }
 .table-wrap {
   overflow: auto;
+  position: relative;
+  isolation: isolate;
   background: #fff;
   border: 1px solid var(--grid-strong);
   border-radius: 12px;
@@ -684,9 +686,10 @@ html, body {
   /* 모바일에서는 컬럼 드래그 리사이즈 핸들을 숨긴다(불안정 방지, 고정폭 유지) */
   .col-resize { display: none !important; }
   .table-wrap {
-    height: calc(100dvh - 120px);
-    max-height: calc(100dvh - 120px);
+    height: clamp(360px, calc(100dvh - 120px), 460px);
+    max-height: clamp(360px, calc(100dvh - 120px), 460px);
     min-height: 0;
+    overflow-y: auto;
     overscroll-behavior: contain;
   }
   .sheet { font-size: 13px; }
@@ -698,10 +701,10 @@ html, body {
     padding-top: 3px;
     padding-bottom: 3px;
   }
-  .sheet tfoot tr.foot-balance-row td { position: sticky !important; bottom: 0; }
-  .sheet tfoot tr.foot-expense-row td { position: sticky !important; bottom: 30px; }
-  .sheet tfoot tr.foot-total-row td { position: sticky !important; bottom: 60px; }
-  .sheet tfoot tr.foot-winner-row td { position: sticky !important; bottom: 90px; }
+  .sheet tfoot tr.foot-balance-row td { position: sticky !important; bottom: 0; z-index: 20; }
+  .sheet tfoot tr.foot-expense-row td { position: sticky !important; bottom: var(--foot-balance-height, 30px); z-index: 21; }
+  .sheet tfoot tr.foot-total-row td { position: sticky !important; bottom: calc(var(--foot-balance-height, 30px) + var(--foot-expense-height, 30px)); z-index: 22; }
+  .sheet tfoot tr.foot-winner-row td { position: sticky !important; bottom: calc(var(--foot-balance-height, 30px) + var(--foot-expense-height, 30px) + var(--foot-total-height, 30px)); z-index: 23; }
   .sheet tfoot td.foot-label,
   .sheet tfoot td.foot-extra-label { z-index: 18; }
   .sheet tfoot td.foot-winner {

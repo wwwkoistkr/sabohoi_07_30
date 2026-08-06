@@ -94,7 +94,7 @@ function baseTotalAmount() {
     return total;
   }
   function currentTotalAmount() { return baseTotalAmount() - totalExpensesAll(); }
-  function balanceFor(dateId) { return baseTotalAmount() - totalExpensesThrough(dateId); }
+  function balanceFor(dateId) { return baseTotalAmount() - expenseFor(dateId); }
   // 화면에 쓰이는 문구 기본값 (관리자 모드에서 수정 가능)
   function defaultLabels() {
     return {
@@ -171,15 +171,24 @@ function baseTotalAmount() {
   }
   function scoreEditTimes() {
     var root = (state.editTimes && typeof state.editTimes === 'object') ? state.editTimes : {};
-    var nested = Object.prototype.hasOwnProperty.call(root, 'cells') || Object.prototype.hasOwnProperty.call(root, 'names');
+    var nested = Object.prototype.hasOwnProperty.call(root, 'cells') || Object.prototype.hasOwnProperty.call(root, 'names') || Object.prototype.hasOwnProperty.call(root, 'expenses');
     if (nested) {
       root.cells = (root.cells && typeof root.cells === 'object') ? root.cells : {};
       state.editTimes = root;
       return root.cells;
     }
-    state.editTimes = { cells: Object.assign({}, root) };
+    state.editTimes = { cells: Object.assign({}, root), expenses: {} };
     return state.editTimes.cells;
-  }  function queueCellEdit(key, value, previous) {
+  }
+  function expenseEditTimes() {
+    var root = (state.editTimes && typeof state.editTimes === 'object') ? state.editTimes : {};
+    var nested = Object.prototype.hasOwnProperty.call(root, 'cells') || Object.prototype.hasOwnProperty.call(root, 'names') || Object.prototype.hasOwnProperty.call(root, 'expenses');
+    if (!nested) root = { cells: Object.assign({}, root) };
+    root.expenses = (root.expenses && typeof root.expenses === 'object') ? root.expenses : {};
+    state.editTimes = root;
+    return root.expenses;
+  }
+  function queueCellEdit(key, value, previous) {
     var editTimes = scoreEditTimes();
     var firstEditedAt = Number(editTimes[key]) || (previous ? 0 : Date.now());
     pendingCellEdits[key] = { value: value, seq: ++cellEditSequence, editedAt: firstEditedAt };
@@ -215,8 +224,14 @@ function baseTotalAmount() {
     return cleared;
   }
 
-  function queueExtraEdit(key, value, notify) {
-    pendingExtraEdits[key] = { value: Number(value) || 0, seq: ++extraEditSequence, notify: !!notify };
+  function queueExtraEdit(key, value, notify, editedAt) {
+    pendingExtraEdits[key] = { value: Number(value) || 0, seq: ++extraEditSequence, notify: !!notify, editedAt: Number(editedAt) || 0 };
+  }
+  function queueExpenseEdit(dateId, value, previous) {
+    var editTimes = expenseEditTimes();
+    var firstEditedAt = Number(editTimes[dateId]) || (previous ? 0 : Date.now());
+    queueExtraEdit('expense|' + dateId, value, true, firstEditedAt);
+    if (value && firstEditedAt) editTimes[dateId] = firstEditedAt; else delete editTimes[dateId];
   }
   function snapshotPendingExtraEdits() {
     var copy = {};
@@ -232,8 +247,14 @@ function baseTotalAmount() {
         state.extra.total = edit.value;
       } else if (key.indexOf('expense|') === 0) {
         var dateId = key.slice(8);
-        if (edit.value) state.extra.expenses[dateId] = edit.value; else delete state.extra.expenses[dateId];
-        delete state.extra.legacyExpense;
+        var editTimes = expenseEditTimes();
+        if (edit.value) {
+          state.extra.expenses[dateId] = edit.value;
+          if (edit.editedAt) editTimes[dateId] = edit.editedAt; else delete editTimes[dateId];
+        } else {
+          delete state.extra.expenses[dateId];
+          delete editTimes[dateId];
+        }
       }
     });
   }
@@ -307,7 +328,7 @@ function baseTotalAmount() {
           pendingCellEdits = {};
           pendingExtraEdits = {};
           pendingServerSave = false;
-          alert('입력 후 24시간이 지난 타수의 수정·삭제와 총액·지출 변경은 관리자 로그인이 필요합니다. 서버 최신값으로 다시 맞춥니다.');
+          alert('입력 후 24시간이 지난 타수·날짜별 지출의 수정·삭제와 총액 변경은 관리자 로그인이 필요합니다. 서버 최신값으로 다시 맞춥니다.');
           reloadFromServer();
         }
         return;
@@ -517,7 +538,7 @@ function baseTotalAmount() {
     applyLabels();
     renderHead(); renderBody(); renderFoot(); applyWidths();
     // 표 너비와 2단 헤더의 실제 높이를 렌더 뒤 계산한다.
-    requestAnimationFrame(function () { syncHeaderWidth(); syncStickyHeaderOffsets(); });
+    requestAnimationFrame(function () { syncHeaderWidth(); syncStickyHeaderOffsets(); syncStickyFooterOffsets(); });
   }
 
   // 상단 제목 등 정적 DOM에 편집된 문구를 반영
@@ -544,6 +565,16 @@ function baseTotalAmount() {
     var firstRow = head && head.querySelector('.date-group-row');
     if (!firstRow) return;
     head.style.setProperty('--date-group-height', Math.ceil(firstRow.getBoundingClientRect().height) + 'px');
+  }
+  function syncStickyFooterOffsets() {
+    var sheet = document.getElementById('sheet');
+    if (!sheet || !foot) return;
+    var balanceRow = foot.querySelector('.foot-balance-row');
+    var expenseRow = foot.querySelector('.foot-expense-row');
+    var totalRow = foot.querySelector('.foot-total-row');
+    sheet.style.setProperty('--foot-balance-height', Math.ceil(balanceRow ? balanceRow.getBoundingClientRect().height : 30) + 'px');
+    sheet.style.setProperty('--foot-expense-height', Math.ceil(expenseRow ? expenseRow.getBoundingClientRect().height : 30) + 'px');
+    sheet.style.setProperty('--foot-total-height', Math.ceil(totalRow ? totalRow.getBoundingClientRect().height : 30) + 'px');
   }
 
   // 좁은 화면(모바일/태블릿/가로화면 등 900px 이하)인지 판단.
@@ -669,7 +700,7 @@ function baseTotalAmount() {
     if (_vd.hiddenCount > 0) h += '<td class="foot-extra-filler"></td>';
     _vd.visible.forEach(function (d) {
       var ex = expenseFor(d.id);
-      h += '<td colspan="2" class="foot-extra-cell foot-date-value"><input type="text" inputmode="none" readonly class="extra-input' + (ex ? ' has-val' : '') + (isAdmin ? '' : ' locked') + '" data-expense-date="' + d.id + '" value="' + (ex ? fmt(ex) : '') + '" placeholder="0"' + (isAdmin ? '' : ' aria-readonly="true"') + ' /></td>';
+      h += '<td colspan="2" class="foot-extra-cell foot-date-value"><input type="text" inputmode="none" readonly class="extra-input' + (ex ? ' has-val' : '') + '" data-expense-date="' + d.id + '" value="' + (ex ? fmt(ex) : '') + '" placeholder="0" aria-label="' + escapeHtml(fmtDateFull(d.iso) + ' 날짜별 지출 입력') + '" /></td>';
     });
     h += '</tr>';
 
@@ -746,7 +777,7 @@ function baseTotalAmount() {
       if (m1) { m1.name = t.value; save(); }
     }
   });
-  // 잔액(자동 계산: 총액 - 해당 날짜까지의 누적 지출)을 실시간 갱신 (표 안 tfoot 셀)
+  // 잔액(자동 계산: 총액 - 각 날짜의 지출)을 실시간 갱신 (표 안 tfoot 셀)
   function refreshBalance() {
     state.dates.forEach(function (d) {
       var el = foot.querySelector('[data-balance-date="' + d.id + '"]');
@@ -757,7 +788,7 @@ function baseTotalAmount() {
     });
   }
   // ============================================================
-  //  총액·날짜별 지출 입력 — 관리자만 입력·수정 가능
+  //  총액은 관리자 전용, 날짜별 지출은 누구나 입력 후 24시간 안에 수정·지움 가능
   //  ★★모바일 키패드 사라짐 방지 (표에 이어붙인 상태에서도 안정) ★★
   //   입력칸은 render 때마다 새로 생성되므로, 특정 엘리먼트가 아니라 foot(tfoot)에
   //   "이벤트 위임"으로 바인딩한다(엘리먼트가 파괴돼도 리스너가 살아있음).
@@ -800,7 +831,7 @@ function baseTotalAmount() {
     expensePad.style.top = top + 'px';
   }
   function openExpenseQuickPad(t) {
-    if (!isAdmin || !t) return;
+    if (!t) return;
     if (qpTarget) closeQuickPad(false);
     if (expenseTarget && expenseTarget !== t) closeExpenseQuickPad(false);
     expenseTarget = t;
@@ -844,18 +875,32 @@ function baseTotalAmount() {
     expenseDraft = '';
     expenseReplaceOnNextDigit = true;
   }
+  function expenseEditExpiredForUser(dateId, previous) {
+    if (isAdmin || !previous) return false;
+    var editedAt = Number(expenseEditTimes()[dateId]) || 0;
+    return !editedAt || Date.now() - editedAt >= (24 * 60 * 60 * 1000);
+  }
   function completeExpenseQuickPad() {
-    if (!expenseTarget || !isAdmin) return;
+    if (!expenseTarget) return;
     var target = expenseTarget;
     var dateId = target.getAttribute('data-expense-date');
     var previous = savedExpenseValue(target);
     var value = Math.max(0, parseNum(expenseDraft));
+    if (value !== previous && expenseEditExpiredForUser(dateId, previous)) {
+      alert('입력 후 24시간이 지난 날짜별 지출은 관리자 모드에서만 수정하거나 지울 수 있습니다.');
+      expenseDraft = String(previous);
+      expenseReplaceOnNextDigit = true;
+      updateExpenseQuickPreview();
+      return;
+    }
     if (value !== previous) {
       if (!state.extra) state.extra = { expenses: {} };
       if (!state.extra.expenses) state.extra.expenses = {};
+      var latest = state.dates.slice().sort(function (a, b) { return b.iso.localeCompare(a.iso); })[0];
+      var wasLegacyValue = latest && latest.id === dateId && !Object.prototype.hasOwnProperty.call(state.extra.expenses, dateId) && Number(state.extra.legacyExpense);
       if (value) state.extra.expenses[dateId] = value; else delete state.extra.expenses[dateId];
-      delete state.extra.legacyExpense;
-      queueExtraEdit('expense|' + dateId, value, true);
+      if (wasLegacyValue) delete state.extra.legacyExpense;
+      queueExpenseEdit(dateId, value, previous);
       saveLocal();
       scheduleServerSave();
     } else {
@@ -882,22 +927,24 @@ function baseTotalAmount() {
   });
 
   foot.addEventListener('focus', function (e) {
-    var t = e.target; if (!t.matches('.extra-input') || !isAdmin) return;
+    var t = e.target; if (!t.matches('.extra-input')) return;
     t.dataset.originalValue = t.value;
     if (t.hasAttribute('data-expense-date')) {
       openExpenseQuickPad(t);
       return;
     }
+    if (!isAdmin) return;
     setTimeout(function () { try { t.select(); } catch (x) {} }, 0);
   }, true);
   foot.addEventListener('input', function (e) {
-    var t = e.target; if (!t.matches('.extra-input') || !isAdmin) return;
+    var t = e.target; if (!t.matches('.extra-input')) return;
     if (t.hasAttribute('data-expense-date')) {
       expenseDraft = String(parseNum(t.value) || '');
       expenseReplaceOnNextDigit = false;
       updateExpenseQuickPreview();
       return;
     }
+    if (!isAdmin) return;
     var num = Math.max(0, parseNum(t.value));
     if (!state.extra) state.extra = { expenses: {} };
     state.extra.total = num;
@@ -917,20 +964,21 @@ function baseTotalAmount() {
     saveLocal();
   });
   foot.addEventListener('keydown', function (e) {
-    var t = e.target; if (!t.matches('[data-expense-date]') || !isAdmin) return;
+    var t = e.target; if (!t.matches('[data-expense-date]')) return;
     if (/^[0-9]$/.test(e.key)) { e.preventDefault(); enterExpenseDigit(e.key); }
     else if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); clearExpenseDraft(); }
     else if (e.key === 'Enter') { e.preventDefault(); completeExpenseQuickPad(); }
     else if (e.key === 'Escape') { e.preventDefault(); closeExpenseQuickPad(false); }
   });
   foot.addEventListener('blur', function (e) {
-    var t = e.target; if (!t.matches('.extra-input') || !isAdmin) return;
+    var t = e.target; if (!t.matches('.extra-input')) return;
     if (t.hasAttribute('data-expense-date')) {
       setTimeout(function () {
         if (expenseTarget === t && document.activeElement !== t) closeExpenseQuickPad(false);
       }, 0);
       return;
     }
+    if (!isAdmin) return;
     var num = parseNum(t.value);
     var original = parseNum(t.dataset.originalValue);
     t.value = num ? fmt(num) : '';
@@ -1137,7 +1185,7 @@ function baseTotalAmount() {
   var resizeReRenderTimer = null;
   window.addEventListener('resize', function () {
     if (qpTarget) positionQuickPad(qpTarget);
-    syncHeaderWidth(); syncStickyHeaderOffsets();
+    syncHeaderWidth(); syncStickyHeaderOffsets(); syncStickyFooterOffsets();
     // 화면 폭이 바뀌면 접힘 개수도 달라지므로 다시 렌더(입력 중이면 건너뜀)
     if (resizeReRenderTimer) clearTimeout(resizeReRenderTimer);
     resizeReRenderTimer = setTimeout(function () {
@@ -1423,7 +1471,7 @@ function baseTotalAmount() {
         banner.innerHTML = '<i class="fas fa-lock-open"></i><span class="mode-banner-text">관리자 모드 · 모든 값을 <b>수정·삭제</b>할 수 있습니다</span>';
       } else {
         banner.className = 'mode-banner mode-user';
-        banner.innerHTML = '<i class="fas fa-pen"></i><span class="mode-banner-text">일반 사용자 모드 · 타수는 입력 후 <b>24시간 안에 수정·지움</b>할 수 있습니다. 이후 수정·삭제와 총액·날짜별 지출은 관리자만 가능합니다.</span>';
+        banner.innerHTML = '<i class="fas fa-pen"></i><span class="mode-banner-text">일반 사용자 모드 · 타수와 날짜별 지출은 입력 후 <b>24시간 안에 수정·지움</b>할 수 있습니다. 이후 변경과 총액 입력은 관리자만 가능합니다.</span>';
       }
     }
   }
@@ -1485,7 +1533,7 @@ function baseTotalAmount() {
   // 관리자 로그아웃
   document.getElementById('btn-logout').addEventListener('click', function () {
     endAdminSession(false);
-    alert('관리자 모드를 종료했습니다. 타수는 입력 후 24시간 안에만 수정·지움할 수 있습니다.');
+    alert('관리자 모드를 종료했습니다. 타수와 날짜별 지출은 입력 후 24시간 안에만 수정·지움할 수 있습니다.');
   });
 
   function updateAssetCount() {
